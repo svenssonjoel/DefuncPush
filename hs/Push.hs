@@ -11,6 +11,7 @@ import Control.Monad.Primitive
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as M 
 
+import Prelude hiding (reverse) 
 
 ---------------------------------------------------------------------------
 
@@ -76,6 +77,12 @@ instance Monad m => ToPush m (Push m) where
 instance Monad m => ToPush m Pull where
   toPush = push 
 
+instance Monad m => ToPush m V.Vector where
+  toPush = toPush . pullfrom
+
+
+pullfrom :: V.Vector a -> Pull a
+pullfrom v = Pull (\i -> v V.! i ) (V.length v) 
 
 ---------------------------------------------------------------------------
 -- write to vector
@@ -90,4 +97,12 @@ freeze (Push p l) =
 
 
 ---------------------------------------------------------------------------
--- 
+-- Simple program
+---------------------------------------------------------------------------
+
+input1 = Pull (\i -> i) 128 
+
+test1 :: Monad m => Pull Int -> Push m Int
+test1 = reverse . push  
+
+runTest1 = freeze (test1 input1 :: Push IO Int) 
