@@ -2,7 +2,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE KindSignatures #-}
+
 module PushF where
 
 
@@ -32,7 +32,7 @@ data Pull a = Pull (Index -> a) Length
 --------------------------------------------------------------------------- 
 data Push m a = Push ((Write a m) ~> m ()) Length 
 
-data Write a (m :: * -> *) where
+data Write a m where
   MapW :: Write b m -> (a -> b) -> Write a m
   IMapW :: Write b m -> (a -> Index -> b) -> Write a m
   IxMapW :: Write a m -> (Index -> Index) -> Write a m 
@@ -59,7 +59,7 @@ data a ~> b where
 apply :: (a ~> b) -> (a -> b)
 apply (Map p f) = \k -> apply p (MapW k f)
 apply (IMap p f) = \k -> apply p (IMapW k f)
-apply (IxMap p f) = \k -> apply p (IxMapW k f) -- ((\k -> p (\i a -> k (f i) a)) l 
+apply (IxMap p f) = \k -> apply p (IxMapW k f) 
 apply (Append l p1 p2) = \k -> apply p1 k >>
                                apply p2 (AppendW k l)
 
