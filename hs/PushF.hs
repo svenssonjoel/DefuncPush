@@ -65,7 +65,7 @@ applyW (BindW l f k r) = \i a -> do s <- readRef r
                                     let (q,m) = (f a)
                                     apply q (BindW2 k s)
                                     writeRef r (s + m)
-applyW (BindW2 k s) = \j b -> applyW k (s + j) b
+applyW (BindW2 k s) = \j b -> applyW k (s + j) b    -- duplicate append again
 applyW (BindLength f r) = \_ a -> do let l'' = f a
                                      modifyRef r (+l'')
 
