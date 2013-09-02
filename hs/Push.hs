@@ -11,7 +11,7 @@ import Control.Monad.Primitive
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as M 
 
-import Prelude hiding (reverse) 
+import Prelude hiding (reverse,zip) 
 
 ---------------------------------------------------------------------------
 
@@ -59,6 +59,28 @@ p1 ++ p2 =
 
 reverse :: Push m a -> Push m a
 reverse p = ixmap (\i -> (len p - 1) - i) p
+
+iterate :: Monad m => Length -> (a -> a) -> a -> Push m a
+iterate n f a = Push (\k ->
+                       forM_ [0..(n-1)] $ \i -> 
+                         k i ((Prelude.iterate f a) !! i)  
+                       ) n
+
+
+unpair :: Monad m => Pull (a,a) -> Push m a
+unpair (Pull ixf n) =
+  Push (\k ->
+         forM_ [0..(n-1)] $ \i ->
+           k (i*2) (fst (ixf i)) >>
+           k (i*2+1) (snd (ixf i))) (2*n)
+
+zipPush :: Monad m => Pull a -> Pull a -> Push m a
+zipPush p1 p2 = unpair $  zipPull p1 p2 
+
+  
+zipPull :: Pull a -> Pull b -> Pull (a,b)
+zipPull (Pull p1 n1) (Pull p2 n2) = Pull (\i -> (p1 i, p2 i)) (min n1 n2) 
+
 
 ---------------------------------------------------------------------------
 -- Conversion Pull Push

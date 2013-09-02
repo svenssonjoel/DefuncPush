@@ -39,7 +39,7 @@ data Write a m where
   ApplyW :: (Index -> a -> m ()) -> Write a m
   AppendW :: Write a m -> Index -> Write a m
   VectorW :: PrimMonad m => M.MVector (PrimState m) a -> Write a m
-   
+  
 
 applyW :: Write a m -> (Index -> a -> m ())
 applyW (MapW k f) =  \i a -> applyW k i (f a)
@@ -49,12 +49,15 @@ applyW (ApplyW k) = k
 applyW (AppendW k l) =  \i a -> applyW k (l + i) a
 applyW (VectorW v) = \i a -> M.write v i a
 
+
 data a ~> b where
   Map :: ((Write a m) ~> m ()) -> (a -> b) -> ((Write b m) ~> m ())
   IMap :: ((Write a m) ~> m ()) -> (a -> Index -> b) -> ((Write b m) ~> m ())
   IxMap :: ((Write a m) ~> m ()) -> (Index -> Index) -> ((Write a m) ~> m ()) 
   Append :: Monad m => Index -> (Write a m ~> m ()) -> (Write a m ~> m ()) -> (Write a m ~> m ())
   Generate :: Monad m => (Index -> a) -> Length -> ((Write a m) ~> m ())
+  Iterate :: Monad m => (a -> a) -> a -> Length -> ((Write a m) ~> m ())
+  Unpair :: Monad m => (Index -> (a,a)) -> Length -> ((Write a m) ~> m ())
 
 apply :: (a ~> b) -> (a -> b)
 apply (Map p f) = \k -> apply p (MapW k f)
@@ -63,13 +66,15 @@ apply (IxMap p f) = \k -> apply p (IxMapW k f)
 apply (Append l p1 p2) = \k -> apply p1 k >>
                                apply p2 (AppendW k l)
 
--- Bit of a ? for me 
+-- Bit of a ? for me (This are different since they use applyW (did I miss something?) 
 apply (Generate ixf n) = (\k -> forM_ [0..(n-1)] $ \i ->
                            applyW k i (ixf i))
+apply (Iterate f a n) = \k -> forM_ [0..(n-1)] $ \i -> 
+                         applyW k i ((Prelude.iterate f a) !! i)
+apply (Unpair f n) = \k -> forM_ [0..(n-1)] $ \i ->
+                             applyW k (i*2) (fst (f i)) >>
+                             applyW k (i*2+1) (snd (f i))
 
--- or 
--- apply (Generate ixf n) = \k -> GenerateW ixf n 
--- but would need to be able to perform monadic ops in Write then
 
 {-
 data F a m where
@@ -103,6 +108,26 @@ ixmap f (Push p l) = Push (IxMap p f) l
 
 reverse :: Push m a -> Push m a
 reverse p = ixmap (\i -> (len p - 1) - i) p
+
+iterate :: Monad m => Length -> (a -> a) -> a -> Push m a
+iterate n f a = Push (Iterate f a n) n 
+
+unpair :: Monad m => Pull (a,a) -> Push m a
+unpair (Pull ixf n) =
+  Push (Unpair ixf n) (2*n)
+  --(\k ->
+  --       forM_ [0..(n-1)] $ \i ->
+  --         k (i*2) (fst (ixf i)) >>
+  --         k (i*2+1) (snd (ixf i))) (2*n)
+
+zipPush :: Monad m => Pull a -> Pull a -> Push m a
+zipPush p1 p2 = unpair $  zipPull p1 p2 
+
+  
+zipPull :: Pull a -> Pull b -> Pull (a,b)
+zipPull (Pull p1 n1) (Pull p2 n2) = Pull (\i -> (p1 i, p2 i)) (min n1 n2) 
+
+
 
 ---------------------------------------------------------------------------
 -- Conversion Pull Push
