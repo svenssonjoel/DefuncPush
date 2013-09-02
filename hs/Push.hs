@@ -1,5 +1,6 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Push where
 
@@ -7,6 +8,8 @@ module Push where
 import Control.Monad
 import Control.Monad.ST
 import Control.Monad.Primitive
+{- package TypeCompose -}
+import Data.RefMonad
 
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as M 
@@ -81,6 +84,22 @@ zipPush p1 p2 = unpair $  zipPull p1 p2
 zipPull :: Pull a -> Pull b -> Pull (a,b)
 zipPull (Pull p1 n1) (Pull p2 n2) = Pull (\i -> (p1 i, p2 i)) (min n1 n2) 
 
+instance (PrimMonad m, RefMonad m r) => Monad (Push m) where
+  return a = Push (\k -> k 0 a) 1
+  (Push p l) >>= f = Push p' l'
+    where
+      p' k' = do r <- newRef 0
+                 p $ \i a ->
+                   do s <- readRef r
+                      let (Push q m) = (f a)
+                      q (\j b -> k' (s + j) b)
+                      writeRef r (s + m)
+      l' = unsafeInlinePrim $
+           do r <- newRef 0
+              p $ \_ a -> 
+                do let (Push _ l'') = f a
+                   modifyRef r (+l'')
+              readRef r
 
 ---------------------------------------------------------------------------
 -- Conversion Pull Push
