@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module PushF where
 
@@ -9,6 +10,7 @@ module PushF where
 import Control.Monad
 import Control.Monad.ST
 import Control.Monad.Primitive
+import Data.RefMonad
 
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as M 
@@ -39,8 +41,14 @@ data Write a m where
   ApplyW :: (Index -> a -> m ()) -> Write a m
   AppendW :: Write a m -> Index -> Write a m
   VectorW :: PrimMonad m => M.MVector (PrimState m) a -> Write a m
+
   Offset :: Write a m -> Length -> Write a m
   
+
+  BindW :: RefMonad m r => Length -> (a -> ((Write b m) ~> m (),Length)) -> Write b m -> r Index -> Write a m
+  BindW2 :: Write a m -> Index -> Write a m
+  BindLength :: RefMonad m r => (a -> Length) -> r Index -> Write a m
+
 
 applyW :: Write a m -> (Index -> a -> m ())
 applyW (MapW k f) =  \i a -> applyW k i (f a)
@@ -49,7 +57,17 @@ applyW (IxMapW k f) = \i a -> applyW k (f i) a
 applyW (ApplyW k) = k
 applyW (AppendW k l) =  \i a -> applyW k (l + i) a
 applyW (VectorW v) = \i a -> M.write v i a
+
 applyW (Offset k n) = \i a -> applyW k (n + i) a    -- duplicate append
+
+
+applyW (BindW l f k r) = \i a -> do s <- readRef r
+                                    let (q,m) = (f a)
+                                    apply q (BindW2 k s)
+                                    writeRef r (s + m)
+applyW (BindW2 k s) = \j b -> applyW k (s + j) b
+applyW (BindLength f r) = \_ a -> do let l'' = f a
+                                     modifyRef r (+l'')
 
 
 data a ~> b where
@@ -60,6 +78,8 @@ data a ~> b where
   Generate :: Monad m => (Index -> a) -> Length -> ((Write a m) ~> m ())
   Iterate :: Monad m => (a -> a) -> a -> Length -> ((Write a m) ~> m ())
   Unpair :: Monad m => (Index -> (a,a)) -> Length -> ((Write a m) ~> m ())
+  Return :: a -> ((Write a m) ~> m ())
+  Bind :: RefMonad m r => ((Write a m) ~> m ()) -> Length -> (a -> ((Write b m) ~> m (),Length)) -> ((Write b m) ~> m ())
 
   Scatter :: Monad m => (Index -> (a,Index)) -> Length -> ((Write a m) ~> m ())
   Before  :: Monad m => ((Write b m) ~> m ()) -> ((Write b m) ~> m ()) -> ((Write b m) ~> m ()) 
@@ -82,6 +102,10 @@ apply (Iterate f a n) = \k -> forM_ [0..(n-1)] $ \i ->
 apply (Unpair f n) = \k -> forM_ [0..(n-1)] $ \i ->
                              applyW k (i*2) (fst (f i)) >>
                              applyW k (i*2+1) (snd (f i))
+apply (Return a) = \k -> applyW k 0 a
+apply (Bind p l f) = \k -> do r <- newRef 0
+                              apply p (BindW l f k r)
+
 
 apply (Scatter f n) = \k -> forM_ [0..(n-1)] $ \i ->
                               applyW k (snd (f i)) (fst (f i))
@@ -105,6 +129,7 @@ data F a m where
 apply :: F a m -> ((Index -> a -> m ()) -> m ())
 apply ....
 -}
+
 ---------------------------------------------------------------------------
 -- Basic functions on push arrays
 ---------------------------------------------------------------------------
@@ -145,6 +170,7 @@ zipPull :: Pull a -> Pull b -> Pull (a,b)
 zipPull (Pull p1 n1) (Pull p2 n2) = Pull (\i -> (p1 i, p2 i)) (min n1 n2) 
 
 
+
 scatter :: Monad m => Pull (a,Index) -> Push m a
 scatter (Pull ixf n) =
   Push (Scatter ixf n) n 
@@ -163,6 +189,20 @@ flatten (Pull ixf n) =
     where lengths = [len (ixf i) | i <- [0..n-1]]
           sm   = scanl (+) 0 lengths 
           pFun (Push p _) = p 
+
+
+instance (PrimMonad m, RefMonad m r) => Monad (Push m) where
+  return a = Push (Return a) 1
+  (Push p l) >>= f = Push p' l'
+    where
+      -- A trick so that the data types don't depend on the type Push
+      g a = let (Push p l) = f a in (p,l)
+      h a = let (Push _ l) = f a in l
+      p' = Bind p l g
+      l' = unsafeInlinePrim $
+           do r <- newRef 0
+              apply p (BindLength h r)
+              readRef r
 
 
 ---------------------------------------------------------------------------
