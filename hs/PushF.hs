@@ -39,6 +39,7 @@ data Write a m where
   ApplyW :: (Index -> a -> m ()) -> Write a m
   AppendW :: Write a m -> Index -> Write a m
   VectorW :: PrimMonad m => M.MVector (PrimState m) a -> Write a m
+  Offset :: Write a m -> Length -> Write a m
   
 
 applyW :: Write a m -> (Index -> a -> m ())
@@ -48,6 +49,7 @@ applyW (IxMapW k f) = \i a -> applyW k (f i) a
 applyW (ApplyW k) = k
 applyW (AppendW k l) =  \i a -> applyW k (l + i) a
 applyW (VectorW v) = \i a -> M.write v i a
+applyW (Offset k n) = \i a -> applyW k (n + i) a    -- duplicate append
 
 
 data a ~> b where
@@ -58,6 +60,12 @@ data a ~> b where
   Generate :: Monad m => (Index -> a) -> Length -> ((Write a m) ~> m ())
   Iterate :: Monad m => (a -> a) -> a -> Length -> ((Write a m) ~> m ())
   Unpair :: Monad m => (Index -> (a,a)) -> Length -> ((Write a m) ~> m ())
+
+  Scatter :: Monad m => (Index -> (a,Index)) -> Length -> ((Write a m) ~> m ())
+  Before  :: Monad m => ((Write b m) ~> m ()) -> ((Write b m) ~> m ()) -> ((Write b m) ~> m ()) 
+
+  Flatten :: Monad m => (Index -> ((Write a m) ~> m ())) -> [Length] -> Length -> ((Write a m) ~> m ()) 
+                                                                      
 
 apply :: (a ~> b) -> (a -> b)
 apply (Map p f) = \k -> apply p (MapW k f)
@@ -74,6 +82,20 @@ apply (Iterate f a n) = \k -> forM_ [0..(n-1)] $ \i ->
 apply (Unpair f n) = \k -> forM_ [0..(n-1)] $ \i ->
                              applyW k (i*2) (fst (f i)) >>
                              applyW k (i*2+1) (snd (f i))
+
+apply (Scatter f n) = \k -> forM_ [0..(n-1)] $ \i ->
+                              applyW k (snd (f i)) (fst (f i))
+apply (Before p1 p2) = \k -> apply p1 k >> apply p2 k 
+
+apply (Flatten p lengths n) =
+  \k -> forM_ [0..n-1] $ \i ->
+  do
+    forM_ [0..(lengths !! i)-1] $ \elem ->
+      let k' = Offset k (sm !! i) 
+      in  apply (p i) k'
+  where sm   = scanl (+) 0 lengths 
+     
+
 
 
 {-
@@ -115,18 +137,32 @@ iterate n f a = Push (Iterate f a n) n
 unpair :: Monad m => Pull (a,a) -> Push m a
 unpair (Pull ixf n) =
   Push (Unpair ixf n) (2*n)
-  --(\k ->
-  --       forM_ [0..(n-1)] $ \i ->
-  --         k (i*2) (fst (ixf i)) >>
-  --         k (i*2+1) (snd (ixf i))) (2*n)
 
 zipPush :: Monad m => Pull a -> Pull a -> Push m a
 zipPush p1 p2 = unpair $  zipPull p1 p2 
-
   
 zipPull :: Pull a -> Pull b -> Pull (a,b)
 zipPull (Pull p1 n1) (Pull p2 n2) = Pull (\i -> (p1 i, p2 i)) (min n1 n2) 
 
+
+scatter :: Monad m => Pull (a,Index) -> Push m a
+scatter (Pull ixf n) =
+  Push (Scatter ixf n) n 
+
+-- combine effects of two push arrays. The second may overwrite the first.
+before :: Monad m => Push m a -> Push m a -> Push m a
+before (Push p1 n1) (Push p2 n2) =
+    Push (Before p1 p2) (max n1 n2) 
+
+
+
+-- Complicated case
+flatten :: Monad m => Pull (Push m a) -> Push m a
+flatten (Pull ixf n) =
+  Push (Flatten (pFun . ixf) lengths n) (last sm)
+    where lengths = [len (ixf i) | i <- [0..n-1]]
+          sm   = scanl (+) 0 lengths 
+          pFun (Push p _) = p 
 
 
 ---------------------------------------------------------------------------

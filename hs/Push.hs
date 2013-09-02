@@ -11,7 +11,7 @@ import Control.Monad.Primitive
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as M 
 
-import Prelude hiding (reverse,zip) 
+import Prelude hiding (reverse,zip,concat,map) 
 
 ---------------------------------------------------------------------------
 
@@ -38,6 +38,8 @@ data Push m a = Push ((Index -> a -> m ()) -> m ()) Length
 
 len :: Push m a -> Length
 len (Push _ n) = n
+
+
 
 (<:) :: Push m a -> (Index -> a -> m ()) -> m () 
 (Push p _) <: k = p k 
@@ -81,6 +83,34 @@ zipPush p1 p2 = unpair $  zipPull p1 p2
 zipPull :: Pull a -> Pull b -> Pull (a,b)
 zipPull (Pull p1 n1) (Pull p2 n2) = Pull (\i -> (p1 i, p2 i)) (min n1 n2) 
 
+
+scatter :: Monad m => Pull (a,Index) -> Push m a
+scatter (Pull ixf n) =
+  Push (\k ->
+         forM_ [0..(n-1)] $ \i ->
+           k (snd (ixf i)) (fst (ixf i))) n 
+
+
+-- combine effects of two push arrays. The second may overwrite the first.
+before :: Monad m => Push m a -> Push m a -> Push m a
+before (Push p1 n1) (Push p2 n2) =
+  Push (\k -> p1 k >> p2 k) (max n1 n2)
+
+
+
+flatten :: Monad m => Pull (Push m a) -> Push m a
+flatten (Pull ixf n) =
+  Push (\k ->
+         forM_ [0..n-1] $ \i ->
+             let (Push p m) = ixf i
+                 k' j a = k (sm !! i + j) a
+             in  p k') (last sm)
+             
+             
+
+  where lengths = [len (ixf i) | i <- [0..n-1]]
+        sm   = scanl (+) 0 lengths 
+        
 
 ---------------------------------------------------------------------------
 -- Conversion Pull Push
