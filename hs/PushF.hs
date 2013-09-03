@@ -252,6 +252,9 @@ instance Monad m => ToPush m (Push m) where
 instance (PullFrom c, Monad m) => ToPush m c where
   toPush = push . pullfrom
 
+---------------------------------------------------------------------------
+-- Convert to Pull array
+--------------------------------------------------------------------------- 
 class PullFrom c where
   pullfrom :: c a -> Pull a
 
