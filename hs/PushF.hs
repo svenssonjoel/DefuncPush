@@ -4,6 +4,9 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE UndecidableInstances #-}
 
+{-# LANGUAGE ScopedTypeVariables #-}  -- for the bind example only
+
+
 module PushF where
 
 
@@ -321,5 +324,13 @@ test3 p = flatten p
 runTest3 = freeze (test3 i :: Push IO Int) 
 
 ---------------------------------------------------------------------------
---
+-- Bind test
 ---------------------------------------------------------------------------
+
+pinput :: (PrimMonad m, RefMonad m r) => Push m Int
+pinput = toPush [1,2,3,4] 
+
+test4 :: forall m r . (RefMonad m r, PrimMonad m) => Push m Int ->  Push m Int
+test4 p = p >>= (\a -> (toPush [a,a,a] :: Push m Int) ) 
+
+runTest4 = freeze (test4 pinput :: Push IO Int) 
