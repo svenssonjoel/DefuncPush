@@ -122,13 +122,10 @@ apply (Scatter f n) = \k -> forM_ [0..(n-1)] $ \i ->
                               applyW k (snd (f i)) (fst (f i))
 apply (Before p1 p2) = \k -> apply p1 k >> apply p2 k 
 
-apply (Flatten p lengths n) =
+apply (Flatten p sm n) =
   \k -> forM_ [0..n-1] $ \i ->
-  do
-    forM_ [0..(lengths !! i)-1] $ \elem ->
-      let k' = Offset k (sm !! i) 
-      in  apply (p i) k'
-  where sm   = scanl (+) 0 lengths 
+      apply (p i) (AppendW k (sm !! i) )
+
 apply (Stride start step n f) =
   \k -> forM_ [0..n-1] $ \i ->
          applyW k (start + step*i) (f i) 
@@ -200,16 +197,17 @@ before (Push p1 n1) (Push p2 n2) =
 -- Complicated case
 flatten :: Monad m => Pull (Push m a) -> Push m a
 flatten (Pull ixf n) =
-  Push (Flatten (pFun . ixf) lengths n) (last sm)
+  Push (Flatten (pFun . ixf) sm n) (last sm)
     where lengths = [len (ixf i) | i <- [0..n-1]]
           sm   = scanl (+) 0 lengths 
-          pFun (Push p _) = p 
+          pFun (Push p _) = p
+                            
 
 --                   start     step
 stride :: Monad m => Index -> Length -> Pull a -> Push m a 
 stride start step (Pull ixf n) =
   Push (Stride start step n ixf) m
-  where m = start + n*step
+  where m = (start + n*step) - 1
 
 
 zipByStride :: Monad m => Pull a -> Pull a -> Push m a
@@ -239,7 +237,7 @@ instance (PrimMonad m, RefMonad m r) => Monad (Push m) where
 
 
 ---------------------------------------------------------------------------
--- Conversion Pull Push
+-- Conversion Pull Push (Clean this mess up)
 ---------------------------------------------------------------------------
 
 push (Pull ixf n) =
@@ -251,15 +249,20 @@ class ToPush m arr where
 instance Monad m => ToPush m (Push m) where
   toPush = id
 
-instance Monad m => ToPush m Pull where
-  toPush = push 
+instance (PullFrom c, Monad m) => ToPush m c where
+  toPush = push . pullfrom
 
-instance Monad m => ToPush m V.Vector where
-  toPush = toPush . pullfrom
+class PullFrom c where
+  pullfrom :: c a -> Pull a
 
+instance PullFrom V.Vector where
+  pullfrom v = Pull (\i -> v V.! i ) (V.length v)
 
-pullfrom :: V.Vector a -> Pull a
-pullfrom v = Pull (\i -> v V.! i ) (V.length v) 
+instance PullFrom [] where 
+  pullfrom as = Pull (\i -> as !! i) (length as) 
+
+instance PullFrom Pull where
+  pullfrom = id 
 
 ---------------------------------------------------------------------------
 -- write to vector
@@ -285,7 +288,34 @@ test1 = reverse . push
 runTest1 = freeze (test1 input1 :: Push IO Int) 
 
 
+---------------------------------------------------------------------------
+-- zip test
+---------------------------------------------------------------------------
+i1 = Pull (\i -> i) 32
+i2 = Pull (\i -> i + 32) 32
 
+test2 :: Monad m => Pull Int -> Pull Int -> Push m Int
+test2 a1 a2 = zipByStride a1 a2
+
+test2b :: Monad m => Pull Int -> Pull Int -> Push m Int
+test2b a1 a2 = zipByPermute (toPush a1) (toPush a2)
+
+
+runTest2 = freeze (test2 i1 i2 :: Push IO Int)
+runTest2b = freeze (test2b i1 i2 :: Push IO Int) 
+
+
+---------------------------------------------------------------------------
+-- Flatten test
+---------------------------------------------------------------------------
+
+i :: Monad m => Pull (Push m Int) 
+i = pullfrom (Prelude.map (toPush . pullfrom) [[1,2,3],[4,5],[6]])
+
+test3 :: Monad m => Pull (Push m Int) -> Push m Int
+test3 p = flatten p 
+
+runTest3 = freeze (test3 i :: Push IO Int) 
 
 ---------------------------------------------------------------------------
 --

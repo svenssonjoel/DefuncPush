@@ -136,7 +136,7 @@ stride start step (Pull ixf n) =
   Push (\k ->
          forM_ [0..n-1] $ \i ->
           k (start + step*i) (ixf i)  ) m
-  where m = start + n*step
+  where m = (start + n*step) - 1
 
 
 zipByStride :: Monad m => Pull a -> Pull a -> Push m a
