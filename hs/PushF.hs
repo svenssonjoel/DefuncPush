@@ -85,7 +85,7 @@ data a ~> b where
   Before  :: Monad m => ((Write b m) ~> m ()) -> ((Write b m) ~> m ()) -> ((Write b m) ~> m ()) 
 
   Flatten :: Monad m => (Index -> ((Write a m) ~> m ())) -> [Length] -> Length -> ((Write a m) ~> m ()) 
-                                                                      
+  Stride  :: Monad m => Index -> Length -> Length -> (Index -> a) -> ((Write a m) ~> m ())
 
 apply :: (a ~> b) -> (a -> b)
 apply (Map p f) = \k -> apply p (MapW k f)
@@ -124,7 +124,9 @@ apply (Flatten p lengths n) =
       let k' = Offset k (sm !! i) 
       in  apply (p i) k'
   where sm   = scanl (+) 0 lengths 
-     
+apply (Stride start step n f) =
+  \k -> forM_ [0..n-1] $ \i ->
+         applyW k (start + step*i) (f i) 
 
 
 
@@ -175,8 +177,6 @@ zipPush p1 p2 = unpair $  zipPull p1 p2
 zipPull :: Pull a -> Pull b -> Pull (a,b)
 zipPull (Pull p1 n1) (Pull p2 n2) = Pull (\i -> (p1 i, p2 i)) (min n1 n2) 
 
-
-
 scatter :: Monad m => Pull (a,Index) -> Push m a
 scatter (Pull ixf n) =
   Push (Scatter ixf n) n 
@@ -195,6 +195,17 @@ flatten (Pull ixf n) =
     where lengths = [len (ixf i) | i <- [0..n-1]]
           sm   = scanl (+) 0 lengths 
           pFun (Push p _) = p 
+
+--                   start     step
+stride :: Monad m => Index -> Length -> Pull a -> Push m a 
+stride start step (Pull ixf n) =
+  Push (Stride start step n ixf) m
+  where m = start + n*step
+
+
+zipByStride :: Monad m => Pull a -> Pull a -> Push m a
+zipByStride p1 p2 = stride 0 2 p1 `before` stride 1 2 p2 
+
 
 
 instance (PrimMonad m, RefMonad m r) => Monad (Push m) where

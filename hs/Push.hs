@@ -43,7 +43,6 @@ len :: Push m a -> Length
 len (Push _ n) = n
 
 
-
 (<:) :: Push m a -> (Index -> a -> m ()) -> m () 
 (Push p _) <: k = p k 
 
@@ -129,8 +128,20 @@ flatten (Pull ixf n) =
 
   where lengths = [len (ixf i) | i <- [0..n-1]]
         sm   = scanl (+) 0 lengths 
-        
 
+
+--                   start     step
+stride :: Monad m => Index -> Length -> Pull a -> Push m a 
+stride start step (Pull ixf n) =
+  Push (\k ->
+         forM_ [0..n-1] $ \i ->
+          k (start + step*i) (ixf i)  ) m
+  where m = start + n*step
+
+
+zipByStride :: Monad m => Pull a -> Pull a -> Push m a
+zipByStride p1 p2 = stride 0 2 p1 `before` stride 1 2 p2 
+        
 ---------------------------------------------------------------------------
 -- Conversion Pull Push
 ---------------------------------------------------------------------------
