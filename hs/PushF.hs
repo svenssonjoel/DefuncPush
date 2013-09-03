@@ -336,3 +336,21 @@ test4 :: forall m r . (RefMonad m r, PrimMonad m) => Push m Int ->  Push m Int
 test4 p = p >>= (\a -> (toPush [a,a,a] :: Push m Int) ) 
 
 runTest4 = freeze (test4 pinput :: Push IO Int) 
+
+
+---------------------------------------------------------------------------
+-- Stride test (Stride is not entirely correct) 
+---------------------------------------------------------------------------
+
+sinput :: Pull Int
+sinput = pullfrom [1..9]
+
+test5 :: Monad m => Pull Int -> Push m Int
+test5 arr =  (toPush (pullfrom (replicate 45 0))) `before` stride 0 5 arr
+
+test5b :: Monad m => Pull Int -> Push m Int
+test5b arr =  (toPush (pullfrom (replicate 29 0))) `before` stride 2 3 arr
+
+
+runTest5 = freeze (test5 sinput :: Push IO Int)
+runTest5b = freeze (test5b sinput :: Push IO Int)
