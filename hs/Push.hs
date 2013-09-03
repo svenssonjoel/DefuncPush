@@ -141,7 +141,15 @@ stride start step (Pull ixf n) =
 
 zipByStride :: Monad m => Pull a -> Pull a -> Push m a
 zipByStride p1 p2 = stride 0 2 p1 `before` stride 1 2 p2 
-        
+
+zipByPermute :: Monad m => Push m a -> Push m a -> Push m a
+zipByPermute p1 p2 =
+  Push (\k -> p1' <: k >> p2' <: k)  (2*(min (len p1) (len p2))) 
+  where
+    p1' = ixmap (\i -> i*2) p1
+    p2' = ixmap (\i -> i*2+1) p2 
+
+
 ---------------------------------------------------------------------------
 -- Conversion Pull Push
 ---------------------------------------------------------------------------

@@ -80,12 +80,15 @@ data a ~> b where
   Unpair :: Monad m => (Index -> (a,a)) -> Length -> ((Write a m) ~> m ())
   Return :: a -> ((Write a m) ~> m ())
   Bind :: RefMonad m r => ((Write a m) ~> m ()) -> Length -> (a -> ((Write b m) ~> m (),Length)) -> ((Write b m) ~> m ())
-
+  Seq :: Monad m => ((Write a m) ~> m ()) -> ((Write a m) ~> m ()) -> ((Write a m) ~> m ()) 
+  
   Scatter :: Monad m => (Index -> (a,Index)) -> Length -> ((Write a m) ~> m ())
   Before  :: Monad m => ((Write b m) ~> m ()) -> ((Write b m) ~> m ()) -> ((Write b m) ~> m ()) 
 
   Flatten :: Monad m => (Index -> ((Write a m) ~> m ())) -> [Length] -> Length -> ((Write a m) ~> m ()) 
   Stride  :: Monad m => Index -> Length -> Length -> (Index -> a) -> ((Write a m) ~> m ())
+  
+
 
 apply :: (a ~> b) -> (a -> b)
 apply (Map p f) = \k -> apply p (MapW k f)
@@ -112,6 +115,8 @@ apply (Return a) = \k -> applyW k 0 a
 apply (Bind p l f) = \k -> do r <- newRef 0
                               apply p (BindW l f k r)
 
+apply (Seq p1 p2) = \k -> apply p1 k >> apply p2 k
+  
 
 apply (Scatter f n) = \k -> forM_ [0..(n-1)] $ \i ->
                               applyW k (snd (f i)) (fst (f i))
@@ -147,6 +152,10 @@ len (Push _ n) = n
 
 (<:) :: Push m a -> (Index -> a -> m ()) -> m () 
 (Push p _) <: k = apply p (ApplyW k)
+
+-- (<~:) :: Push m a -> Write a m ~> m () 
+(Push p _) <~: k = apply p k
+
 
 map :: (a -> b) -> Push m a -> Push m b
 map f (Push p l) = Push (Map p f) l
@@ -205,6 +214,13 @@ stride start step (Pull ixf n) =
 
 zipByStride :: Monad m => Pull a -> Pull a -> Push m a
 zipByStride p1 p2 = stride 0 2 p1 `before` stride 1 2 p2 
+
+zipByPermute :: Monad m => Push m a -> Push m a -> Push m a
+zipByPermute p1 p2 =
+   Push (Seq p1' p2') (2*(min (len p1) (len p2))) -- duplicates 'Before' 
+   where
+     (Push p1' _) = ixmap (\i -> i*2) p1
+     (Push p2' _) = ixmap (\i -> i*2+1) p2 
 
 
 
