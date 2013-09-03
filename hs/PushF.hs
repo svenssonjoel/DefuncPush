@@ -76,7 +76,7 @@ data a ~> b where
   IxMap :: ((Write a m) ~> m ()) -> (Index -> Index) -> ((Write a m) ~> m ()) 
   Append :: Monad m => Index -> (Write a m ~> m ()) -> (Write a m ~> m ()) -> (Write a m ~> m ())
   Generate :: Monad m => (Index -> a) -> Length -> ((Write a m) ~> m ())
-  Iterate :: Monad m => (a -> a) -> a -> Length -> ((Write a m) ~> m ())
+  Iterate :: RefMonad m r => (a -> a) -> a -> Length -> ((Write a m) ~> m ())
   Unpair :: Monad m => (Index -> (a,a)) -> Length -> ((Write a m) ~> m ())
   Return :: a -> ((Write a m) ~> m ())
   Bind :: RefMonad m r => ((Write a m) ~> m ()) -> Length -> (a -> ((Write b m) ~> m (),Length)) -> ((Write b m) ~> m ())
@@ -94,11 +94,17 @@ apply (IxMap p f) = \k -> apply p (IxMapW k f)
 apply (Append l p1 p2) = \k -> apply p1 k >>
                                apply p2 (AppendW k l)
 
--- Bit of a ? for me (This are different since they use applyW (did I miss something?) 
 apply (Generate ixf n) = (\k -> forM_ [0..(n-1)] $ \i ->
                            applyW k i (ixf i))
-apply (Iterate f a n) = \k -> forM_ [0..(n-1)] $ \i -> 
-                         applyW k i ((Prelude.iterate f a) !! i)
+apply (Iterate f a n) = \k ->
+  do
+    sum <- newRef a 
+    forM_ [0..(n-1)] $ \i ->
+      do
+        val <- readRef sum
+        applyW k i val 
+        writeRef sum (f val) 
+        
 apply (Unpair f n) = \k -> forM_ [0..(n-1)] $ \i ->
                              applyW k (i*2) (fst (f i)) >>
                              applyW k (i*2+1) (snd (f i))
@@ -156,7 +162,7 @@ ixmap f (Push p l) = Push (IxMap p f) l
 reverse :: Push m a -> Push m a
 reverse p = ixmap (\i -> (len p - 1) - i) p
 
-iterate :: Monad m => Length -> (a -> a) -> a -> Push m a
+iterate :: RefMonad m r => Length -> (a -> a) -> a -> Push m a
 iterate n f a = Push (Iterate f a n) n 
 
 unpair :: Monad m => Pull (a,a) -> Push m a
