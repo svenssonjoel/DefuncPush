@@ -42,14 +42,15 @@ data Write a m where
   IMapW :: Write b m -> (a -> Index -> b) -> Write a m
   IxMapW :: Write a m -> (Index -> Index) -> Write a m 
   ApplyW :: (Index -> a -> m ()) -> Write a m
-  AppendW :: Write a m -> Index -> Write a m
+
   VectorW :: PrimMonad m => M.MVector (PrimState m) a -> Write a m
 
+  AppendW :: Write a m -> Index -> Write a m
   Offset :: Write a m -> Length -> Write a m
-  
+  BindW2 :: Write a m -> Index -> Write a m  
 
   BindW :: RefMonad m r => Length -> (a -> ((Write b m) ~> m (),Length)) -> Write b m -> r Index -> Write a m
-  BindW2 :: Write a m -> Index -> Write a m
+
   BindLength :: RefMonad m r => (a -> Length) -> r Index -> Write a m
 
 
@@ -58,17 +59,18 @@ applyW (MapW k f) =  \i a -> applyW k i (f a)
 applyW (IMapW k f) = \i a -> applyW k i (f a i)
 applyW (IxMapW k f) = \i a -> applyW k (f i) a 
 applyW (ApplyW k) = k
-applyW (AppendW k l) =  \i a -> applyW k (l + i) a
+
 applyW (VectorW v) = \i a -> M.write v i a
 
+applyW (AppendW k l) = \i a -> applyW k (l + i) a
 applyW (Offset k n) = \i a -> applyW k (n + i) a    -- duplicate append
-
+applyW (BindW2 k s) = \j b -> applyW k (s + j) b    -- duplicate append again
 
 applyW (BindW l f k r) = \i a -> do s <- readRef r
                                     let (q,m) = (f a)
                                     apply q (BindW2 k s)
                                     writeRef r (s + m)
-applyW (BindW2 k s) = \j b -> applyW k (s + j) b    -- duplicate append again
+
 applyW (BindLength f r) = \_ a -> do let l'' = f a
                                      modifyRef r (+l'')
 
