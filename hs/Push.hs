@@ -14,7 +14,7 @@ import Data.RefMonad
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as M 
 
-import Prelude hiding (reverse,zip,concat,map) 
+import Prelude hiding (reverse,zip,concat,map,scanl) 
 
 ---------------------------------------------------------------------------
 
@@ -150,8 +150,8 @@ zipByPermute p1 p2 =
     p2' = ixmap (\i -> i*2+1) p2 
 
 
-scanl_ :: (PullFrom c, RefMonad m r) => (a -> b -> a) -> a -> c b -> Push m a
-scanl_ f init v = Push g l
+scanl :: (PullFrom c, RefMonad m r) => (a -> b -> a) -> a -> c b -> Push m a
+scanl f init v = Push g l
   where
     (Pull ixf n) = pullfrom v
     l = n -- length v
