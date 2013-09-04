@@ -150,6 +150,15 @@ zipByPermute p1 p2 =
     p2' = ixmap (\i -> i*2+1) p2 
 
 
+scanl_ :: (PullFrom c, RefMonad m r) => (a -> b -> a) -> a -> c b -> Push m a
+scanl_ f init v = Push g l
+  where
+    (Pull ixf n) = pullfrom v
+    l = n -- length v
+    g k = do s <- newRef init
+             forM_ [0..l-1] $ \ix -> do
+               modifyRef s (`f` (ixf ix))
+               readRef s >>= k ix
 ---------------------------------------------------------------------------
 -- Conversion Pull Push
 ---------------------------------------------------------------------------
@@ -167,12 +176,23 @@ instance Monad m => ToPush m (Push m) where
 instance Monad m => ToPush m Pull where
   toPush = push 
 
-instance Monad m => ToPush m V.Vector where
-  toPush = toPush . pullfrom
+instance (PullFrom c, Monad m) => ToPush m c  where
+  toPush = push . pullfrom
 
+---------------------------------------------------------------------------
+-- Convert to Pull array
+--------------------------------------------------------------------------- 
+class PullFrom c where
+  pullfrom :: c a -> Pull a
 
-pullfrom :: V.Vector a -> Pull a
-pullfrom v = Pull (\i -> v V.! i ) (V.length v) 
+instance PullFrom V.Vector where
+  pullfrom v = Pull (\i -> v V.! i ) (V.length v)
+
+instance PullFrom [] where 
+  pullfrom as = Pull (\i -> as !! i) (length as) 
+
+instance PullFrom Pull where
+  pullfrom = id 
 
 ---------------------------------------------------------------------------
 -- write to vector
