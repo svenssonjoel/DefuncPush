@@ -16,6 +16,7 @@ import qualified Data.Vector.Mutable as M
 
 import Prelude hiding (reverse,zip,concat,map,scanl) 
 
+import qualified Prelude as P 
 ---------------------------------------------------------------------------
 
 type Index = Int
@@ -102,6 +103,23 @@ instance (PrimMonad m, RefMonad m r) => Monad (Push m) where
                    modifyRef r (+l'')
               readRef r
 
+                            
+join :: (PrimMonad m, RefMonad m r)  => Push m (Push m a) -> Push m a
+join (Push p n) =
+  Push p' l'  
+   where
+     p' = \k -> do r <- newRef 0
+                   p $ \i (Push q m) ->
+                     do
+                       s <- readRef r
+                       q (\j b -> k (s+j) b)
+                       writeRef r (s + m) 
+     l' = unsafeInlinePrim $
+           do r <- newRef 0
+              p $ \_ (Push _ l'') -> modifyRef r (+l'')
+              readRef r
+
+
 scatter :: Monad m => Pull (a,Index) -> Push m a
 scatter (Pull ixf n) =
   Push (\k ->
@@ -127,8 +145,7 @@ flatten (Pull ixf n) =
              
 
   where lengths = [len (ixf i) | i <- [0..n-1]]
-        sm   = scanl (+) 0 lengths 
-
+        sm   = P.scanl (+) 0 lengths 
 
 --                   start     step
 stride :: Monad m => Index -> Length -> Pull a -> Push m a 
