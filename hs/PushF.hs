@@ -18,7 +18,8 @@ import Data.RefMonad
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as M 
 
-import Prelude hiding (reverse) 
+import Prelude hiding (reverse,scanl)
+import qualified Prelude as P 
 
 ---------------------------------------------------------------------------
 
@@ -85,6 +86,9 @@ data a ~> b where
   Unpair :: Monad m => (Index -> (a,a)) -> Length -> ((Write a m) ~> m ())
   Return :: a -> ((Write a m) ~> m ())
   Bind :: RefMonad m r => ((Write a m) ~> m ()) -> Length -> (a -> ((Write b m) ~> m (),Length)) -> ((Write b m) ~> m ())
+
+  Join :: RefMonad m r => ((Write ((Write a m) ~> m ()) m) ~> m ()) -> ((Write a m) ~> m ()) 
+
   Seq :: Monad m => ((Write a m) ~> m ()) -> ((Write a m) ~> m ()) -> ((Write a m) ~> m ()) 
   
   Scatter :: Monad m => (Index -> (a,Index)) -> Length -> ((Write a m) ~> m ())
@@ -119,6 +123,15 @@ apply (Unpair f n) = \k -> forM_ [0..(n-1)] $ \i ->
 apply (Return a) = \k -> applyW k 0 a
 apply (Bind p l f) = \k -> do r <- newRef 0
                               apply p (BindW l f k r)
+
+-- Work in progress                           
+-- apply (Join p) = \k -> do r <- newRef 0
+--                           p $ \i (Push q m) ->
+--                             do
+--                               s <- readRef r
+--                               q (\j b -> k (s+j) b)
+--                               writeRef r (s + m) 
+
 
 apply (Seq p1 p2) = \k -> apply p1 k >> apply p2 k
   
@@ -204,9 +217,20 @@ flatten :: Monad m => Pull (Push m a) -> Push m a
 flatten (Pull ixf n) =
   Push (Flatten (pFun . ixf) sm n) (last sm)
     where lengths = [len (ixf i) | i <- [0..n-1]]
-          sm   = scanl (+) 0 lengths 
+          sm   = P.scanl (+) 0 lengths 
           pFun (Push p _) = p
-                            
+
+
+{-
+scanl :: (PullFrom c, RefMonad m r) => (a -> b -> a) -> a -> c b -> Push m a
+scanl f init v = Push g l
+  where
+    (Pull ixf n) = pullfrom v
+    g k = do s <- newRef init
+             forM_ [0..n-1] $ \ix -> do
+               modifyRef s (`f` (ixf ix))
+               readRef s >>= k ix
+-}                
 
 --                   start     step
 stride :: Monad m => Index -> Length -> Pull a -> Push m a 
@@ -240,8 +264,25 @@ instance (PrimMonad m, RefMonad m r) => Monad (Push m) where
               apply p (BindLength h r)
               readRef r
 
+join :: (PrimMonad m, RefMonad m r ) => Push m (Push m a) -> Push m a
+join mm = do
+  m <- mm
+  m
 
-
+-- join :: (PrimMonad m, RefMonad m r)  => Push m (Push m a) -> Push m a
+-- join (Push p n) =
+--   Push p' l'  
+--    where
+--      p' = \k -> do r <- newRef 0
+--                    p $ \i (Push q m) ->
+--                      do
+--                        s <- readRef r
+--                        q (\j b -> k (s+j) b)
+--                        writeRef r (s + m) 
+--      l' = unsafeInlinePrim $
+--            do r <- newRef 0
+--               p $ \_ (Push _ l'') -> modifyRef r (+l'')
+--               readRef r
 ---------------------------------------------------------------------------
 -- Conversion Pull Push (Clean this mess up)
 ---------------------------------------------------------------------------

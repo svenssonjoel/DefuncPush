@@ -168,12 +168,11 @@ zipByPermute p1 p2 =
 
 
 scanl :: (PullFrom c, RefMonad m r) => (a -> b -> a) -> a -> c b -> Push m a
-scanl f init v = Push g l
+scanl f init v = Push g n
   where
     (Pull ixf n) = pullfrom v
-    l = n -- length v
     g k = do s <- newRef init
-             forM_ [0..l-1] $ \ix -> do
+             forM_ [0..n-1] $ \ix -> do
                modifyRef s (`f` (ixf ix))
                readRef s >>= k ix
 ---------------------------------------------------------------------------
