@@ -87,8 +87,6 @@ data a ~> b where
   Return :: a -> ((Write a m) ~> m ())
   Bind :: RefMonad m r => ((Write a m) ~> m ()) -> Length -> (a -> ((Write b m) ~> m (),Length)) -> ((Write b m) ~> m ())
 
-  Join :: RefMonad m r => ((Write ((Write a m) ~> m ()) m) ~> m ()) -> ((Write a m) ~> m ()) 
-
   Seq :: Monad m => ((Write a m) ~> m ()) -> ((Write a m) ~> m ()) -> ((Write a m) ~> m ()) 
   
   Scatter :: Monad m => (Index -> (a,Index)) -> Length -> ((Write a m) ~> m ())
@@ -123,15 +121,6 @@ apply (Unpair f n) = \k -> forM_ [0..(n-1)] $ \i ->
 apply (Return a) = \k -> applyW k 0 a
 apply (Bind p l f) = \k -> do r <- newRef 0
                               apply p (BindW l f k r)
-
--- Work in progress                           
--- apply (Join p) = \k -> do r <- newRef 0
---                           p $ \i (Push q m) ->
---                             do
---                               s <- readRef r
---                               q (\j b -> k (s+j) b)
---                               writeRef r (s + m) 
-
 
 apply (Seq p1 p2) = \k -> apply p1 k >> apply p2 k
   
