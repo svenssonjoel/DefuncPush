@@ -32,7 +32,8 @@ data Pull a = Pull (Index -> a) Length
 ---------------------------------------------------------------------------
 -- Push array
 --------------------------------------------------------------------------- 
-data Push m a = Push ((Index -> a -> m ()) -> m ()) Length 
+data Push m a =
+  Push ((Index -> a -> m ()) -> m ()) Length 
 
 
 
