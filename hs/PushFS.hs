@@ -76,7 +76,6 @@ applyW (BindLength f r) = \_ a -> do let l'' = f a
 data PushT b m  where
   Map  :: PushT a m -> (a -> b) -> PushT b m
   IMap :: PushT a m -> (a -> Index -> b) -> PushT b m
-  IxMap :: PushT b m -> (Index -> Index) -> PushT b m
   Append :: Monad m => Index -> PushT b m -> PushT b m -> PushT b m
   Generate :: Monad m => (Index -> b) -> Length -> PushT b m
   Iterate :: RefMonad m r => (b -> b) -> b -> Length -> PushT b m
@@ -88,8 +87,8 @@ data PushT b m  where
   
   -- Unsafe
 
+  IxMap :: PushT b m -> (Index -> Index) -> PushT b m
   Seq :: Monad m => PushT b m -> PushT b m -> PushT b m
-
   Scatter :: Monad m => (Index -> (b,Index)) -> Length -> PushT b m
   Stride  :: Monad m => Index -> Length -> Length -> (Index -> b) -> PushT b m 
   

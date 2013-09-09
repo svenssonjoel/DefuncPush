@@ -79,7 +79,6 @@ applyW (BindLength f r) = \_ a -> do let l'' = f a
 data a ~> b where
   Map :: ((Write a m) ~> m ()) -> (a -> b) -> ((Write b m) ~> m ())
   IMap :: ((Write a m) ~> m ()) -> (a -> Index -> b) -> ((Write b m) ~> m ())
-  IxMap :: ((Write a m) ~> m ()) -> (Index -> Index) -> ((Write a m) ~> m ()) 
   Append :: Monad m => Index -> (Write a m ~> m ()) -> (Write a m ~> m ()) -> (Write a m ~> m ())
   Generate :: Monad m => (Index -> a) -> Length -> ((Write a m) ~> m ())
   Iterate :: RefMonad m r => (a -> a) -> a -> Length -> ((Write a m) ~> m ())
@@ -87,12 +86,15 @@ data a ~> b where
   Return :: a -> ((Write a m) ~> m ())
   Bind :: RefMonad m r => ((Write a m) ~> m ()) -> Length -> (a -> ((Write b m) ~> m (),Length)) -> ((Write b m) ~> m ())
 
-  Seq :: Monad m => ((Write a m) ~> m ()) -> ((Write a m) ~> m ()) -> ((Write a m) ~> m ()) 
+  -- Josef can you help me rewrite this in same style as Bind ? 
+  Flatten :: Monad m => (Index -> ((Write a m) ~> m ())) -> [Length] -> Length -> ((Write a m) ~> m ()) 
+
+  -- UnSafe
+  IxMap :: ((Write a m) ~> m ()) -> (Index -> Index) -> ((Write a m) ~> m ()) 
   
+  Seq :: Monad m => ((Write a m) ~> m ()) -> ((Write a m) ~> m ()) -> ((Write a m) ~> m ()) 
   Scatter :: Monad m => (Index -> (a,Index)) -> Length -> ((Write a m) ~> m ())
   Before  :: Monad m => ((Write b m) ~> m ()) -> ((Write b m) ~> m ()) -> ((Write b m) ~> m ()) 
-
-  Flatten :: Monad m => (Index -> ((Write a m) ~> m ())) -> [Length] -> Length -> ((Write a m) ~> m ()) 
   Stride  :: Monad m => Index -> Length -> Length -> (Index -> a) -> ((Write a m) ~> m ())
   
 
