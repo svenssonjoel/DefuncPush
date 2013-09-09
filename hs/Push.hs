@@ -166,7 +166,6 @@ zipByPermute p1 p2 =
     p1' = ixmap (\i -> i*2) p1
     p2' = ixmap (\i -> i*2+1) p2 
 
-
 scanl :: (PullFrom c, RefMonad m r) => (a -> b -> a) -> a -> c b -> Push m a
 scanl f init v = Push g n
   where
