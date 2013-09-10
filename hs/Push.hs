@@ -90,6 +90,10 @@ unpairP (Push p n) =
           let k' i (a,b) = k (i*2) a >> k (i*2+1) b
           in p k'  
           
+interleave :: Monad m => Push m a -> Push m a -> Push m a
+interleave (Push p m) (Push q n) = Push r (2 * (min m n))
+  where r k = do p (\i a -> k (2*i) a)
+                 q (\i a -> k (2*i+1) a)
 
 ---------------------------------------------------------------------------
 -- Zip (added a special zip)
@@ -425,3 +429,25 @@ test8 :: (RefMonad m r, PrimMonad m) => Push m (Int,Int) -> Push m Int
 test8 p = unpairP  p 
 
 runTest8 = freeze $ (test8 i8 :: Push IO Int)
+
+---------------------------------------------------------------------------
+-- Another test of scanlPush
+---------------------------------------------------------------------------
+i9_1_1,i9_1_2, i9_2_1, i9_2_2,i9_1,i9_2 :: (RefMonad m r, PrimMonad m) => Push m Int
+i9_1_1 = (toPush . pullfrom) [1,2,3,4,5] 
+i9_1_2 = (toPush . pullfrom) [6,7,8,9,10]
+i9_2_1 = (toPush . pullfrom) [1,3,5,7,9] 
+i9_2_2 = (toPush . pullfrom) [2,4,6,8,10]
+i9_1 = i9_1_1 Push.++ i9_1_2
+i9_2 = interleave i9_2_1 i9_2_2
+
+test9 p = scanlPush (+) 0 p
+
+runTest9 = do v1 <- runTest (test9 i9_1)
+              v2 <- runTest (test9 i9_2)
+              return (v1 == v2)
+
+-- Generic test runner
+
+runTest p = freeze $ (p :: Push IO Int)
+
