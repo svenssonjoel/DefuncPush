@@ -220,7 +220,8 @@ scanl f init v = Push g n
              forM_ [0..n-1] $ \ix -> do
                modifyRef s (`f` (ixf ix))
                readRef s >>= k ix
-               
+
+-- Does not work               
 scanlPush :: forall m r a b . (RefMonad m r) => (a -> b -> a) -> a -> Push m b -> Push m a 
 scanlPush f init (Push pin n) =
   Push p' n
@@ -237,17 +238,17 @@ scanlPush f init (Push pin n) =
              let v' = f v b
              writeRef r v'
              k i v'
-            -- return ()
+       
         
 
-foldPush :: forall m r a b . (RefMonad m r) => (a -> b -> a) -> a -> Push m b -> m a
+foldPush :: forall m r a . (RefMonad m r) => (a -> a -> a) -> a -> Push m a -> m a
 foldPush f a (Push p m) =
   do
     r <- newRef a
     p (wf r )
     readRef r
     where
-       wf :: RefMonad m r => r a -> Index -> b -> m ()
+       wf :: RefMonad m r => r a -> Index -> a -> m ()
        wf r = \i b -> 
           do
             v <- readRef r
@@ -256,7 +257,7 @@ foldPush f a (Push p m) =
             -- return ()
 
 -- Same as above but outputs a singleton Push 
-foldPushP :: forall m r a b . (RefMonad m r) => (a -> b -> a) -> a -> Push m b -> Push m a
+foldPushP :: forall m r a . (RefMonad m r) => (a -> a -> a) -> a -> Push m a -> Push m a
 foldPushP f a (Push p m) =
   Push p' 1
   where
@@ -267,7 +268,7 @@ foldPushP f a (Push p m) =
         v <- readRef r
         k 0 v
               
-    wf :: RefMonad m r => r a -> Index -> b -> m ()
+    wf :: RefMonad m r => r a -> Index -> a -> m ()
     wf r = \i b -> 
            do
              v <- readRef r
