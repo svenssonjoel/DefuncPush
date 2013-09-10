@@ -81,7 +81,19 @@ unpair (Pull ixf n) =
          forM_ [0..(n-1)] $ \i ->
            k (i*2) (fst (ixf i)) >>
            k (i*2+1) (snd (ixf i))) (2*n)
+  
+unpairP :: Monad m => Push m (a,a) -> Push m a
+unpairP (Push p n) =
+  Push p' (2*n)
+  where p' =
+          \k ->
+          let k' i (a,b) = k (i*2) a >> k (i*2+1) b
+          in p k'  
+          
 
+---------------------------------------------------------------------------
+-- Zip
+--------------------------------------------------------------------------- 
 zipPush :: Monad m => Pull a -> Pull a -> Push m a
 zipPush p1 p2 = unpair $  zipPull p1 p2 
 
@@ -89,6 +101,10 @@ zipPush p1 p2 = unpair $  zipPull p1 p2
 zipPull :: Pull a -> Pull b -> Pull (a,b)
 zipPull (Pull p1 n1) (Pull p2 n2) = Pull (\i -> (p1 i, p2 i)) (min n1 n2) 
 
+
+---------------------------------------------------------------------------
+-- Monad
+---------------------------------------------------------------------------
 instance (PrimMonad m, RefMonad m r) => Monad (Push m) where
   return a = Push (\k -> k 0 a) 1
   (Push p l) >>= f = Push p' l'
@@ -122,6 +138,12 @@ flatten (Pull ixf n) =
     l = sum [len (ixf i) | i <- [0..n-1]] 
         
 
+---------------------------------------------------------------------------
+-- Joins
+--------------------------------------------------------------------------- 
+joinSimple mm = do
+  m <- mm
+  m 
                             
 join :: (PrimMonad m, RefMonad m r)  => Push m (Push m a) -> Push m a
 join (Push p n) =
@@ -137,6 +159,7 @@ join (Push p n) =
            do r <- newRef 0
               p $ \_ (Push _ l'') -> modifyRef r (+l'')
               readRef r
+
 
 
 scatter :: Monad m => Pull (a,Index) -> Push m a
@@ -173,6 +196,10 @@ zipByPermute p1 p2 =
     p1' = ixmap (\i -> i*2) p1
     p2' = ixmap (\i -> i*2+1) p2 
 
+---------------------------------------------------------------------------
+-- Scans
+---------------------------------------------------------------------------
+
 scanl :: (PullFrom c, RefMonad m r) => (a -> b -> a) -> a -> c b -> Push m a
 scanl f init v = Push g n
   where
@@ -181,7 +208,25 @@ scanl f init v = Push g n
              forM_ [0..n-1] $ \ix -> do
                modifyRef s (`f` (ixf ix))
                readRef s >>= k ix
-
+               
+scanlPush :: forall m r a b . (RefMonad m r) => (a -> b -> a) -> a -> Push m b -> Push m a 
+scanlPush f init (Push pin n) =
+  Push p' n
+  where
+    p' = \k ->
+      do
+        r <- newRef init
+        pin (wf k r)
+        
+    wf :: RefMonad m r => (Index -> a -> m ()) -> r a -> Index -> b -> m ()
+    wf k r = \i b -> 
+           do
+             v <- readRef r
+             let v' = f v b
+             writeRef r v'
+             k i v'
+            -- return ()
+        
 
 foldPush :: forall m r a b . (RefMonad m r) => (a -> b -> a) -> a -> Push m b -> m a
 foldPush f a (Push p m) =
@@ -196,7 +241,7 @@ foldPush f a (Push p m) =
             v <- readRef r
             let v' = f v b
             writeRef r v'
-            return ()
+            -- return ()
 
 -- Same as above but outputs a singleton Push 
 foldPushP :: forall m r a b . (RefMonad m r) => (a -> b -> a) -> a -> Push m b -> Push m a
@@ -216,7 +261,7 @@ foldPushP f a (Push p m) =
              v <- readRef r
              let v' = f v b
              writeRef r v'
-             return ()
+             -- return ()
 
 
 
@@ -349,3 +394,26 @@ test6 :: (RefMonad m r, PrimMonad m) => Push m Int -> m Int
 test6 p = foldPush (+) 0 p 
 
 runTest6 = test6 i6 :: IO Int
+
+---------------------------------------------------------------------------
+-- Test scanlPush
+---------------------------------------------------------------------------
+i7 :: (RefMonad m r, PrimMonad m) => Push m Int
+i7 = (toPush . pullfrom) [1,2,3,4,5,6,7,8,9,10]
+
+test7 :: (RefMonad m r, PrimMonad m) => Push m Int -> Push m Int 
+test7 p = scanlPush  (+) 0 p 
+
+runTest7 = freeze $ (test7 i7 :: Push IO Int)
+
+
+---------------------------------------------------------------------------
+-- Test unpairP
+---------------------------------------------------------------------------
+i8 :: (RefMonad m r, PrimMonad m) => Push m (Int,Int)
+i8 = (toPush . pullfrom) [(1,2),(3,4),(5,6),(7,8),(9,10)]
+
+test8 :: (RefMonad m r, PrimMonad m) => Push m (Int,Int) -> Push m Int 
+test8 p = unpairP  p 
+
+runTest8 = freeze $ (test8 i8 :: Push IO Int)
