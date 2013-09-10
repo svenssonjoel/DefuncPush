@@ -2,6 +2,8 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 
+{-# LANGUAGE ScopedTypeVariables #-}
+
 module Push where
 
 
@@ -179,6 +181,45 @@ scanl f init v = Push g n
              forM_ [0..n-1] $ \ix -> do
                modifyRef s (`f` (ixf ix))
                readRef s >>= k ix
+
+
+foldPush :: forall m r a b . (RefMonad m r) => (a -> b -> a) -> a -> Push m b -> m a
+foldPush f a (Push p m) =
+  do
+    r <- newRef a
+    p (wf r )
+    readRef r
+    where
+       wf :: RefMonad m r => r a -> Index -> b -> m ()
+       wf r = \i b -> 
+          do
+            v <- readRef r
+            let v' = f v b
+            writeRef r v'
+            return ()
+
+-- Same as above but outputs a singleton Push 
+foldPushP :: forall m r a b . (RefMonad m r) => (a -> b -> a) -> a -> Push m b -> Push m a
+foldPushP f a (Push p m) =
+  Push p' 1
+  where
+    p' = \k -> 
+      do
+        r <- newRef a
+        p (wf r )
+        v <- readRef r
+        k 0 v
+              
+    wf :: RefMonad m r => r a -> Index -> b -> m ()
+    wf r = \i b -> 
+           do
+             v <- readRef r
+             let v' = f v b
+             writeRef r v'
+             return ()
+
+
+
 ---------------------------------------------------------------------------
 -- Conversion Pull Push
 ---------------------------------------------------------------------------
@@ -238,11 +279,22 @@ test1 = reverse . push
 runTest1 = freeze (test1 input1 :: Push IO Int) 
 
 
+---------------------------------------------------------------------------
+-- zip test
+---------------------------------------------------------------------------
+i1 = Pull (\i -> i) 32
+i2 = Pull (\i -> i + 32) 32
+
+test2 :: Monad m => Pull Int -> Pull Int -> Push m Int
+test2 a1 a2 = zipByStride a1 a2
+
+test2b :: Monad m => Pull Int -> Pull Int -> Push m Int
+test2b a1 a2 = zipByPermute (toPush a1) (toPush a2)
 
 
----------------------------------------------------------------------------
---
----------------------------------------------------------------------------
+runTest2 = freeze (test2 i1 i2 :: Push IO Int)
+runTest2b = freeze (test2b i1 i2 :: Push IO Int) 
+
 
 ---------------------------------------------------------------------------
 -- Flatten test
@@ -254,4 +306,46 @@ i = pullfrom (P.map (toPush . pullfrom) [[1,2,3],[4,5],[6]])
 test3 :: (RefMonad m r, PrimMonad m) => Pull (Push m Int) -> Push m Int
 test3 p = flatten p 
 
-runTest3 = freeze (test3 i :: Push IO Int) 
+runTest3 = freeze (test3 i :: Push IO Int)
+
+---------------------------------------------------------------------------
+-- Bind test
+---------------------------------------------------------------------------
+
+pinput :: (PrimMonad m, RefMonad m r) => Push m Int
+pinput = toPush [1,2,3,4] 
+
+test4 :: forall m r . (RefMonad m r, PrimMonad m) => Push m Int ->  Push m Int
+test4 p = p >>= (\a -> (toPush [a,a,a] :: Push m Int) ) 
+
+runTest4 = freeze (test4 pinput :: Push IO Int) 
+
+
+---------------------------------------------------------------------------
+-- Stride test (Stride is not entirely correct) 
+---------------------------------------------------------------------------
+
+sinput :: Pull Int
+sinput = pullfrom [1..9]
+
+test5 :: Monad m => Pull Int -> Push m Int
+test5 arr =  (toPush (pullfrom (replicate 45 0))) `before` stride 0 5 arr
+
+test5b :: Monad m => Pull Int -> Push m Int
+test5b arr =  (toPush (pullfrom (replicate 29 0))) `before` stride 2 3 arr
+
+
+runTest5 = freeze (test5 sinput :: Push IO Int)
+runTest5b = freeze (test5b sinput :: Push IO Int)
+
+
+---------------------------------------------------------------------------
+-- Test Fold
+---------------------------------------------------------------------------
+i6 :: (RefMonad m r, PrimMonad m) => Push m Int
+i6 = (toPush . pullfrom) [1,2,3,4,5,6]
+
+test6 :: (RefMonad m r, PrimMonad m) => Push m Int -> m Int
+test6 p = foldPush (+) 0 p 
+
+runTest6 = test6 i6 :: IO Int
