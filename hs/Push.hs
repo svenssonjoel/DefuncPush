@@ -92,11 +92,18 @@ unpairP (Push p n) =
           
 
 ---------------------------------------------------------------------------
--- Zip
+-- Zip (added a special zip)
 --------------------------------------------------------------------------- 
 zipPush :: Monad m => Pull a -> Pull a -> Push m a
 zipPush p1 p2 = unpair $  zipPull p1 p2 
 
+zipSpecial :: Monad m => Push m a -> Pull b -> Push m (a,b)
+zipSpecial (Push p n1) (Pull ixf n2) =
+  Push p' (min n1 n2)
+  where
+    p' = \k ->
+      let k' = \i a -> k i (a, ixf i)
+      in p k'
   
 zipPull :: Pull a -> Pull b -> Pull (a,b)
 zipPull (Pull p1 n1) (Pull p2 n2) = Pull (\i -> (p1 i, p2 i)) (min n1 n2) 
