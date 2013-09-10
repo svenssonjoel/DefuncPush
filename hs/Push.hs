@@ -104,7 +104,8 @@ zipSpecial (Push p n1) (Pull ixf n2) =
     p' = \k ->
       let k' = \i a -> k i (a, ixf i)
       in p k'
-  
+
+    
 zipPull :: Pull a -> Pull b -> Pull (a,b)
 zipPull (Pull p1 n1) (Pull p2 n2) = Pull (\i -> (p1 i, p2 i)) (min n1 n2) 
 
