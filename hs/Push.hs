@@ -104,6 +104,22 @@ instance (PrimMonad m, RefMonad m r) => Monad (Push m) where
                    modifyRef r (+l'')
               readRef r
 
+
+flatten :: (PrimMonad m, RefMonad m r) => Pull (Push m a) -> Push m a
+flatten (Pull ixf n) =
+  Push p l
+  where
+    p = \k ->
+          do
+          r <- newRef 0 
+          forM_ [0..n-1] $ \i -> do
+            s <- readRef r
+            let (Push p m) = ixf i
+            p (\j a -> k (s + j) a) 
+            writeRef r (s + m)
+    l = sum [len (ixf i) | i <- [0..n-1]] 
+        
+
                             
 join :: (PrimMonad m, RefMonad m r)  => Push m (Push m a) -> Push m a
 join (Push p n) =
@@ -135,18 +151,6 @@ before (Push p1 n1) (Push p2 n2) =
 
 
 
-flatten :: Monad m => Pull (Push m a) -> Push m a
-flatten (Pull ixf n) =
-  Push (\k ->
-         forM_ [0..n-1] $ \i ->
-             let (Push p m) = ixf i
-                 k' j a = k (sm !! i + j) a
-             in  p k') (last sm)
-             
-             
-
-  where lengths = [len (ixf i) | i <- [0..n-1]]
-        sm   = P.scanl (+) 0 lengths 
 
 --                   start     step
 stride :: Monad m => Index -> Length -> Pull a -> Push m a 
@@ -186,13 +190,13 @@ push (Pull ixf n) =
 class ToPush m arr where
   toPush ::  arr a -> Push m a
 
-instance Monad m => ToPush m (Push m) where
+instance ToPush m (Push m) where
   toPush = id
 
-instance Monad m => ToPush m Pull where
-  toPush = push 
+--instance ToPush m Pull where
+--  toPush = push 
 
-instance (PullFrom c, Monad m) => ToPush m c  where
+instance (PullFrom c,Monad m ) => ToPush m c  where
   toPush = push . pullfrom
 
 ---------------------------------------------------------------------------
@@ -239,3 +243,15 @@ runTest1 = freeze (test1 input1 :: Push IO Int)
 ---------------------------------------------------------------------------
 --
 ---------------------------------------------------------------------------
+
+---------------------------------------------------------------------------
+-- Flatten test
+---------------------------------------------------------------------------
+
+i :: (RefMonad m r, PrimMonad m) => Pull (Push m Int) 
+i = pullfrom (P.map (toPush . pullfrom) [[1,2,3],[4,5],[6]])
+
+test3 :: (RefMonad m r, PrimMonad m) => Pull (Push m Int) -> Push m Int
+test3 p = flatten p 
+
+runTest3 = freeze (test3 i :: Push IO Int) 

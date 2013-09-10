@@ -83,7 +83,9 @@ data PushT b m  where
   Return :: b -> PushT b m
   Bind :: RefMonad m r => PushT a m -> Length -> (a -> (PushT b m,Length)) -> PushT b m
 
-  Flatten :: Monad m => (Index -> PushT b m) -> [Length] -> Length -> PushT b m  -- Cheating here
+  -- Flatten :: Monad m => (Index -> PushT b m) -> [Length] -> Length -> PushT b m  -- Cheating here
+  Flatten :: RefMonad m r => (Index -> (PushT b m,Length)) -> Length -> PushT b m
+  
   
   -- Unsafe
 
@@ -123,9 +125,20 @@ apply (Seq p1 p2) = \k -> apply p1 k >> apply p2 k
 apply (Scatter f n) = \k -> forM_ [0..(n-1)] $ \i ->
                               applyW k (snd (f i)) (fst (f i))
 
-apply (Flatten p sm n) =
-  \k -> forM_ [0..n-1] $ \i ->
-      apply (p i) (AppendW k (sm !! i) )
+--apply (Flatten p sm n) =
+--  \k -> forM_ [0..n-1] $ \i ->
+--      apply (p i) (AppendW k (sm !! i) )
+
+apply (Flatten ixfp n) =
+  \k ->
+          do
+          r <- newRef 0 
+          forM_ [0..n-1] $ \i -> do
+            s <- readRef r
+            let (p,m) = ixfp i
+            apply p (AppendW k s) -- (\j a -> k (s + j) a) 
+            writeRef r (s + m)
+
 
 apply (Stride start step n f) =
   \k -> forM_ [0..n-1] $ \i ->
@@ -185,14 +198,21 @@ before (Push p1 n1) (Push p2 n2) =
     Push (Seq p1 p2) (max n1 n2) 
 
 
-
+flatten2 :: (PrimMonad m, RefMonad m r) => Pull (Push m a) -> Push m a
+flatten2 (Pull ixf n) =
+  Push (Flatten (pFun . ixf) n) l
+  where
+    --p = 
+    l = sum [len (ixf i) | i <- [0..n-1]]
+    pFun (Push p n) = (p,n) 
+        
 -- Complicated case
-flatten :: Monad m => Pull (Push m a) -> Push m a
-flatten (Pull ixf n) =
-  Push (Flatten (pFun . ixf) sm n) (last sm)
-    where lengths = [len (ixf i) | i <- [0..n-1]]
-          sm   = P.scanl (+) 0 lengths 
-          pFun (Push p _) = p
+-- flatten :: Monad m => Pull (Push m a) -> Push m a
+-- flatten (Pull ixf n) =
+--   Push (Flatten (pFun . ixf) sm n) (last sm)
+--     where lengths = [len (ixf i) | i <- [0..n-1]]
+--           sm   = P.scanl (+) 0 lengths 
+--           pFun (Push p _) = p
 
 
 {-
@@ -319,11 +339,11 @@ runTest2b = freeze (test2b i1 i2 :: Push IO Int)
 -- Flatten test
 ---------------------------------------------------------------------------
 
-i :: Monad m => Pull (Push m Int) 
+i :: (PrimMonad m, RefMonad m r )  => Pull (Push m Int) 
 i = pullfrom (Prelude.map (toPush . pullfrom) [[1,2,3],[4,5],[6]])
 
-test3 :: Monad m => Pull (Push m Int) -> Push m Int
-test3 p = flatten p 
+test3 :: (PrimMonad m,  RefMonad m r) => Pull (Push m Int) -> Push m Int
+test3 p = flatten2 p 
 
 runTest3 = freeze (test3 i :: Push IO Int) 
 
