@@ -44,6 +44,14 @@ data Write a m where
   IxMapW :: Write a m -> (Index -> Index) -> Write a m 
   ApplyW :: (Index -> a -> m ()) -> Write a m
 
+  UnpairW :: Monad m => Write a m -> Write (a,a) m 
+
+  Evens :: Write a m -> Write a m
+  Odds  :: Write a m -> Write a m 
+             
+  -- Felt awkward when writing this down 
+  ZipW  :: Write (a,b) m -> (Index -> b) -> Write a m 
+
   VectorW :: PrimMonad m => M.MVector (PrimState m) a -> Write a m
 
   AppendW :: Write a m -> Index -> Write a m
@@ -58,6 +66,14 @@ applyW (MapW k f) =  \i a -> applyW k i (f a)
 applyW (IMapW k f) = \i a -> applyW k i (f a i)
 applyW (IxMapW k f) = \i a -> applyW k (f i) a 
 applyW (ApplyW k) = k
+
+applyW (UnpairW k) = \i (a,b) ->  applyW k (i*2) a >> applyW k (i*2+1) b
+
+applyW (Evens k) = \i a -> applyW k (i*2) a
+applyW (Odds  k) = \i a -> applyW k (1*2+1) a 
+                                  
+applyW (ZipW k ixf) = \i a -> applyW k i (a, ixf i) 
+
 
 applyW (VectorW v) = \i a -> M.write v i a
 
@@ -80,12 +96,17 @@ data PushT b m  where
   Generate :: Monad m => (Index -> b) -> Length -> PushT b m
   Iterate :: RefMonad m r => (b -> b) -> b -> Length -> PushT b m
   Unpair :: Monad m => (Index -> (b,b)) -> Length -> PushT b m
+  UnpairP :: Monad m => PushT (b,b) m -> PushT b m 
+
+  Interleave :: Monad m => PushT a m -> PushT a m -> PushT a m 
+  
+  Zip :: PushT a m -> (Index -> b) -> PushT (a,b) m 
+  
   Return :: b -> PushT b m
   Bind :: RefMonad m r => PushT a m -> Length -> (a -> (PushT b m,Length)) -> PushT b m
-
-  -- Flatten :: Monad m => (Index -> PushT b m) -> [Length] -> Length -> PushT b m  -- Cheating here
-  Flatten :: RefMonad m r => (Index -> (PushT b m,Length)) -> Length -> PushT b m
   
+  Flatten :: RefMonad m r => (Index -> (PushT b m,Length)) -> Length -> PushT b m
+
   
   -- Unsafe
 
@@ -115,6 +136,28 @@ apply (Iterate f a n) = \k ->
 apply (Unpair f n) = \k -> forM_ [0..(n-1)] $ \i ->
                              applyW k (i*2) (fst (f i)) >>
                              applyW k (i*2+1) (snd (f i))
+                             
+apply (UnpairP p) = \k -> apply p (UnpairW k)
+  --let k' i (a,b) = k (i*2) a >> k (i*2+1) b
+  --in p k'  
+
+apply (Interleave p q) = \k ->
+  do
+    apply p (Evens k)
+    apply q (Odds  k) 
+--where r k = do p (\i a -> k (2*i) a)
+--               q (\i a -> k (2*i+1) a)
+  
+
+
+apply (Zip p ixf) = \k -> let k' = ZipW k ixf
+                              in apply p k' 
+
+  -- = \k ->
+  --     let k' = \i a -> k i (a, ixf i)
+  --     in p k'
+  
+
 apply (Return a) = \k -> applyW k 0 a
 apply (Bind p l f) = \k -> do r <- newRef 0
                               apply p (BindW l f k r)
@@ -178,16 +221,45 @@ reverse p = ixmap (\i -> (len p - 1) - i) p
 iterate :: RefMonad m r => Length -> (a -> a) -> a -> Push m a
 iterate n f a = Push (Iterate f a n) n 
 
+---------------------------------------------------------------------------
+-- unpair / interleave 
+--------------------------------------------------------------------------- 
 unpair :: Monad m => Pull (a,a) -> Push m a
 unpair (Pull ixf n) =
   Push (Unpair ixf n) (2*n)
 
+unpairP :: Monad m => Push m (a,a) -> Push m a
+unpairP (Push p n) =
+  Push (UnpairP p) (2*n)
+
+
+interleave :: Monad m => Push m a -> Push m a -> Push m a
+interleave (Push p m) (Push q n) =
+  Push (Interleave p q)  (2 * (min m n))
+  --where r k = do p (\i a -> k (2*i) a)
+  --               q (\i a -> k (2*i+1) a)
+---------------------------------------------------------------------------
+-- Zips
+--------------------------------------------------------------------------- 
 zipPush :: Monad m => Pull a -> Pull a -> Push m a
 zipPush p1 p2 = unpair $  zipPull p1 p2 
-  
+
+zipSpecial :: Monad m => Push m a -> Pull b -> Push m (a,b)
+zipSpecial (Push p n1) (Pull ixf n2) =
+  Push (Zip p ixf) (min n1 n2)
+  -- where
+  --   p' = \k ->
+  --     let k' = \i a -> k i (a, ixf i)
+  --     in p k'
+
+
+    
 zipPull :: Pull a -> Pull b -> Pull (a,b)
 zipPull (Pull p1 n1) (Pull p2 n2) = Pull (\i -> (p1 i, p2 i)) (min n1 n2) 
 
+---------------------------------------------------------------------------
+--
+--------------------------------------------------------------------------- 
 scatter :: Monad m => Pull (a,Index) -> Push m a
 scatter (Pull ixf n) =
   Push (Scatter ixf n) n 
@@ -198,8 +270,8 @@ before (Push p1 n1) (Push p2 n2) =
     Push (Seq p1 p2) (max n1 n2) 
 
 
-flatten2 :: (PrimMonad m, RefMonad m r) => Pull (Push m a) -> Push m a
-flatten2 (Pull ixf n) =
+flatten :: (PrimMonad m, RefMonad m r) => Pull (Push m a) -> Push m a
+flatten (Pull ixf n) =
   Push (Flatten (pFun . ixf) n) l
   where
     --p = 
@@ -343,7 +415,7 @@ i :: (PrimMonad m, RefMonad m r )  => Pull (Push m Int)
 i = pullfrom (Prelude.map (toPush . pullfrom) [[1,2,3],[4,5],[6]])
 
 test3 :: (PrimMonad m,  RefMonad m r) => Pull (Push m Int) -> Push m Int
-test3 p = flatten2 p 
+test3 p = flatten p 
 
 runTest3 = freeze (test3 i :: Push IO Int) 
 
