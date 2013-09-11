@@ -60,6 +60,7 @@ data Write a m where
 
   BindLength :: RefMonad m r => (a -> Length) -> r Index -> Write a m
 
+  FoldW :: RefMonad m r => r a -> (a -> a -> a) ->  Write a m
 ---------------------------------------------------------------------------
 -- Apply Write 
 ---------------------------------------------------------------------------
@@ -89,6 +90,12 @@ applyW (BindW l f k r) = \i a -> do s <- readRef r
 
 applyW (BindLength f r) = \_ a -> do let l'' = f a
                                      modifyRef r (+l'')
+
+applyW (FoldW r f) = \i b -> 
+  do
+    v <- readRef r
+    let v' = f v b
+    writeRef r v'
 
 ---------------------------------------------------------------------------
 -- Push Language
@@ -277,7 +284,15 @@ scanl :: (PullFrom c, RefMonad m r) => (a -> b -> a) -> a -> c b -> Push m a
 scanl f init v = Push (Scanl f init ixf n) n
   where
     (Pull ixf n) = pullFrom v
-                
+
+
+foldPush :: forall m r a . (RefMonad m r) => (a -> a -> a) -> a -> Push m a -> m a
+foldPush f a (Push p m) = 
+  do
+    r <- newRef a
+    apply p (FoldW r f)
+    readRef r
+    
 
 --                   start     step
 stride :: Monad m => Index -> Length -> Pull a -> Push m a 
