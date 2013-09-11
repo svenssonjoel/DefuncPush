@@ -7,7 +7,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}  -- for the bind example only
 
 
-module PushF where
+module PushFS where
 
 
 import Control.Monad
@@ -21,23 +21,23 @@ import qualified Data.Vector.Mutable as M
 import Prelude hiding (reverse,scanl)
 import qualified Prelude as P 
 
+import Pull
+
+---------------------------------------------------------------------------
+--
 ---------------------------------------------------------------------------
 
 type Index = Int
 type Length = Int 
-
-
----------------------------------------------------------------------------
--- Pull array
----------------------------------------------------------------------------
-
-data Pull a = Pull (Index -> a) Length 
 
 ---------------------------------------------------------------------------
 -- Push array
 --------------------------------------------------------------------------- 
 data Push m a = Push (PushT a m)  Length 
 
+---------------------------------------------------------------------------
+-- Write Function language
+---------------------------------------------------------------------------
 data Write a m where
   MapW :: Write b m -> (a -> b) -> Write a m
   IMapW :: Write b m -> (a -> Index -> b) -> Write a m
@@ -60,7 +60,10 @@ data Write a m where
 
   BindLength :: RefMonad m r => (a -> Length) -> r Index -> Write a m
 
-
+---------------------------------------------------------------------------
+-- Apply Write 
+---------------------------------------------------------------------------
+  
 applyW :: Write a m -> (Index -> a -> m ())
 applyW (MapW k f) =  \i a -> applyW k i (f a)
 applyW (IMapW k f) = \i a -> applyW k i (f a i)
@@ -87,8 +90,9 @@ applyW (BindW l f k r) = \i a -> do s <- readRef r
 applyW (BindLength f r) = \_ a -> do let l'' = f a
                                      modifyRef r (+l'')
 
-
-
+---------------------------------------------------------------------------
+-- Push Language
+---------------------------------------------------------------------------
 data PushT b m  where
   Map  :: PushT a m -> (a -> b) -> PushT b m
   IMap :: PushT a m -> (a -> Index -> b) -> PushT b m
@@ -107,6 +111,7 @@ data PushT b m  where
   
   Flatten :: RefMonad m r => (Index -> (PushT b m,Length)) -> Length -> PushT b m
 
+  Scanl :: RefMonad m r => (a -> b -> a) -> a -> (Index -> b) -> Length -> PushT a m 
   
   -- Unsafe
 
@@ -114,6 +119,10 @@ data PushT b m  where
   Seq :: Monad m => PushT b m -> PushT b m -> PushT b m
   Scatter :: Monad m => (Index -> (b,Index)) -> Length -> PushT b m
   Stride  :: Monad m => Index -> Length -> Length -> (Index -> b) -> PushT b m 
+
+---------------------------------------------------------------------------
+-- Apply
+---------------------------------------------------------------------------
   
 apply :: PushT b m -> (Write b m -> m ())
 apply (Map p f) = \k -> apply p (MapW k f)
@@ -138,25 +147,16 @@ apply (Unpair f n) = \k -> forM_ [0..(n-1)] $ \i ->
                              applyW k (i*2+1) (snd (f i))
                              
 apply (UnpairP p) = \k -> apply p (UnpairW k)
-  --let k' i (a,b) = k (i*2) a >> k (i*2+1) b
-  --in p k'  
 
 apply (Interleave p q) = \k ->
   do
     apply p (Evens k)
     apply q (Odds  k) 
---where r k = do p (\i a -> k (2*i) a)
---               q (\i a -> k (2*i+1) a)
-  
 
 
 apply (Zip p ixf) = \k -> let k' = ZipW k ixf
                               in apply p k' 
 
-  -- = \k ->
-  --     let k' = \i a -> k i (a, ixf i)
-  --     in p k'
-  
 
 apply (Return a) = \k -> applyW k 0 a
 apply (Bind p l f) = \k -> do r <- newRef 0
@@ -168,10 +168,6 @@ apply (Seq p1 p2) = \k -> apply p1 k >> apply p2 k
 apply (Scatter f n) = \k -> forM_ [0..(n-1)] $ \i ->
                               applyW k (snd (f i)) (fst (f i))
 
---apply (Flatten p sm n) =
---  \k -> forM_ [0..n-1] $ \i ->
---      apply (p i) (AppendW k (sm !! i) )
-
 apply (Flatten ixfp n) =
   \k ->
           do
@@ -179,8 +175,15 @@ apply (Flatten ixfp n) =
           forM_ [0..n-1] $ \i -> do
             s <- readRef r
             let (p,m) = ixfp i
-            apply p (AppendW k s) -- (\j a -> k (s + j) a) 
+            apply p (AppendW k s) 
             writeRef r (s + m)
+
+apply (Scanl f init ixf n) = \k ->
+  do
+    s <- newRef init
+    forM_ [0..n-1] $ \ix -> do
+      modifyRef s (`f` (ixf ix))
+      readRef s >>= applyW k ix 
 
 
 apply (Stride start step n f) =
@@ -236,8 +239,8 @@ unpairP (Push p n) =
 interleave :: Monad m => Push m a -> Push m a -> Push m a
 interleave (Push p m) (Push q n) =
   Push (Interleave p q)  (2 * (min m n))
-  --where r k = do p (\i a -> k (2*i) a)
-  --               q (\i a -> k (2*i+1) a)
+
+  
 ---------------------------------------------------------------------------
 -- Zips
 --------------------------------------------------------------------------- 
@@ -247,16 +250,8 @@ zipPush p1 p2 = unpair $  zipPull p1 p2
 zipSpecial :: Monad m => Push m a -> Pull b -> Push m (a,b)
 zipSpecial (Push p n1) (Pull ixf n2) =
   Push (Zip p ixf) (min n1 n2)
-  -- where
-  --   p' = \k ->
-  --     let k' = \i a -> k i (a, ixf i)
-  --     in p k'
 
-
-    
-zipPull :: Pull a -> Pull b -> Pull (a,b)
-zipPull (Pull p1 n1) (Pull p2 n2) = Pull (\i -> (p1 i, p2 i)) (min n1 n2) 
-
+  
 ---------------------------------------------------------------------------
 --
 --------------------------------------------------------------------------- 
@@ -277,26 +272,12 @@ flatten (Pull ixf n) =
     --p = 
     l = sum [len (ixf i) | i <- [0..n-1]]
     pFun (Push p n) = (p,n) 
-        
--- Complicated case
--- flatten :: Monad m => Pull (Push m a) -> Push m a
--- flatten (Pull ixf n) =
---   Push (Flatten (pFun . ixf) sm n) (last sm)
---     where lengths = [len (ixf i) | i <- [0..n-1]]
---           sm   = P.scanl (+) 0 lengths 
---           pFun (Push p _) = p
 
-
-{-
 scanl :: (PullFrom c, RefMonad m r) => (a -> b -> a) -> a -> c b -> Push m a
-scanl f init v = Push g l
+scanl f init v = Push (Scanl f init ixf n) n
   where
-    (Pull ixf n) = pullfrom v
-    g k = do s <- newRef init
-             forM_ [0..n-1] $ \ix -> do
-               modifyRef s (`f` (ixf ix))
-               readRef s >>= k ix
--}                
+    (Pull ixf n) = pullFrom v
+                
 
 --                   start     step
 stride :: Monad m => Index -> Length -> Pull a -> Push m a 
@@ -310,7 +291,7 @@ zipByStride p1 p2 = stride 0 2 p1 `before` stride 1 2 p2
 
 zipByPermute :: Monad m => Push m a -> Push m a -> Push m a
 zipByPermute p1 p2 =
-   Push (Seq p1' p2') (2*(min (len p1) (len p2))) -- duplicates 'Before' 
+   Push (Seq p1' p2') (2*(min (len p1) (len p2))) 
    where
      (Push p1' _) = ixmap (\i -> i*2) p1
      (Push p2' _) = ixmap (\i -> i*2+1) p2 
@@ -349,22 +330,8 @@ instance Monad m => ToPush m (Push m) where
   toPush = id
 
 instance (PullFrom c, Monad m) => ToPush m c where
-  toPush = push . pullfrom
+  toPush = push . pullFrom
 
----------------------------------------------------------------------------
--- Convert to Pull array
---------------------------------------------------------------------------- 
-class PullFrom c where
-  pullfrom :: c a -> Pull a
-
-instance PullFrom V.Vector where
-  pullfrom v = Pull (\i -> v V.! i ) (V.length v)
-
-instance PullFrom [] where 
-  pullfrom as = Pull (\i -> as !! i) (length as) 
-
-instance PullFrom Pull where
-  pullfrom = id 
 
 ---------------------------------------------------------------------------
 -- write to vector
@@ -377,74 +344,3 @@ freeze (Push p l) =
      apply p (VectorW arr)
      V.freeze arr 
 
-
----------------------------------------------------------------------------
--- Simple program
----------------------------------------------------------------------------
-
-input1 = Pull (\i -> i) 128 
-
-test1 :: Monad m => Pull Int -> Push m Int
-test1 = reverse . push  
-
-runTest1 = freeze (test1 input1 :: Push IO Int) 
-
-
----------------------------------------------------------------------------
--- zip test
----------------------------------------------------------------------------
-i1 = Pull (\i -> i) 32
-i2 = Pull (\i -> i + 32) 32
-
-test2 :: Monad m => Pull Int -> Pull Int -> Push m Int
-test2 a1 a2 = zipByStride a1 a2
-
-test2b :: Monad m => Pull Int -> Pull Int -> Push m Int
-test2b a1 a2 = zipByPermute (toPush a1) (toPush a2)
-
-
-runTest2 = freeze (test2 i1 i2 :: Push IO Int)
-runTest2b = freeze (test2b i1 i2 :: Push IO Int) 
-
-
----------------------------------------------------------------------------
--- Flatten test
----------------------------------------------------------------------------
-
-i :: (PrimMonad m, RefMonad m r )  => Pull (Push m Int) 
-i = pullfrom (Prelude.map (toPush . pullfrom) [[1,2,3],[4,5],[6]])
-
-test3 :: (PrimMonad m,  RefMonad m r) => Pull (Push m Int) -> Push m Int
-test3 p = flatten p 
-
-runTest3 = freeze (test3 i :: Push IO Int) 
-
----------------------------------------------------------------------------
--- Bind test
----------------------------------------------------------------------------
-
-pinput :: (PrimMonad m, RefMonad m r) => Push m Int
-pinput = toPush [1,2,3,4] 
-
-test4 :: forall m r . (RefMonad m r, PrimMonad m) => Push m Int ->  Push m Int
-test4 p = p >>= (\a -> (toPush [a,a,a] :: Push m Int) ) 
-
-runTest4 = freeze (test4 pinput :: Push IO Int) 
-
-
----------------------------------------------------------------------------
--- Stride test (Stride is not entirely correct) 
----------------------------------------------------------------------------
-
-sinput :: Pull Int
-sinput = pullfrom [1..9]
-
-test5 :: Monad m => Pull Int -> Push m Int
-test5 arr =  (toPush (pullfrom (replicate 45 0))) `before` stride 0 5 arr
-
-test5b :: Monad m => Pull Int -> Push m Int
-test5b arr =  (toPush (pullfrom (replicate 29 0))) `before` stride 2 3 arr
-
-
-runTest5 = freeze (test5 sinput :: Push IO Int)
-runTest5b = freeze (test5b sinput :: Push IO Int)
