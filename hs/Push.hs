@@ -16,7 +16,7 @@ import Data.RefMonad
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as M 
 
-import Prelude hiding (reverse,zip,concat,map,scanl) 
+import Prelude hiding (reverse,zip,concat,map,scanl,replicate,repeat ) 
 
 import qualified Prelude as P 
 ---------------------------------------------------------------------------
@@ -115,6 +115,13 @@ zipPull :: Pull a -> Pull b -> Pull (a,b)
 zipPull (Pull p1 n1) (Pull p2 n2) = Pull (\i -> (p1 i, p2 i)) (min n1 n2) 
 
 
+-- [1,2,3] -> [1,2,2,3,3,3]
+repeat :: (RefMonad m r, PrimMonad m) => Push m Int -> Push m Int 
+repeat p = p >>= (\a -> replicate a a)
+
+replicate :: (RefMonad m r, PrimMonad m) => Int -> a -> Push m a 
+replicate n a = Push (\k -> forM_ [0..n-1] $ \i -> k i a) n 
+
 ---------------------------------------------------------------------------
 -- Monad
 ---------------------------------------------------------------------------
@@ -134,6 +141,7 @@ instance (PrimMonad m, RefMonad m r) => Monad (Push m) where
                 do let (Push _ l'') = f a
                    modifyRef r (+l'')
               readRef r
+            
 
 
 flatten :: (PrimMonad m, RefMonad m r) => Pull (Push m a) -> Push m a
@@ -388,10 +396,10 @@ sinput :: Pull Int
 sinput = pullfrom [1..9]
 
 test5 :: Monad m => Pull Int -> Push m Int
-test5 arr =  (toPush (pullfrom (replicate 45 0))) `before` stride 0 5 arr
+test5 arr =  (toPush (pullfrom (P.replicate 45 0))) `before` stride 0 5 arr
 
 test5b :: Monad m => Pull Int -> Push m Int
-test5b arr =  (toPush (pullfrom (replicate 29 0))) `before` stride 2 3 arr
+test5b arr =  (toPush (pullfrom (P.replicate 29 0))) `before` stride 2 3 arr
 
 
 runTest5 = freeze (test5 sinput :: Push IO Int)
@@ -452,4 +460,17 @@ runTest9 = do v1 <- runTest (test9 i9_1)
 -- Generic test runner
 
 runTest p = freeze $ (p :: Push IO Int)
+
+
+
+---------------------------------------------------------------------------
+--
+---------------------------------------------------------------------------
+
+input10 = Pull (\i -> i) 5
+
+test10 :: (RefMonad m r, PrimMonad m) => Pull Int -> Push m Int
+test10 = repeat . push  
+
+runTest10 = freeze (test10 input10 :: Push IO Int) 
 

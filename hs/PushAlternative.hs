@@ -13,7 +13,7 @@
 {-# LANGUAGE NoMonomorphismRestriction #-} 
 
 {-# LANGUAGE ConstraintKinds #-}
-
+{-# LANGUAGE KindSignatures #-}
 
 module PushAlternative where
 
@@ -105,12 +105,12 @@ instance  Show (Prg a) where
 ---------------------------------------------------------------------------
 -- Write Language
 ---------------------------------------------------------------------------
-data Write ctx mem i a prg where
-  MapW ::  ctx b => Write ctx mem i b prg -> (a -> b) -> Write ctx mem i a prg
+data Write ctx mem (ref :: * -> *)  i a prg where
+  MapW ::  ctx b => Write ctx mem ref i b prg -> (a -> b) -> Write ctx mem ref i a prg
           -- this HO aspect is problematic (thus the ctx parameter)  
-  ApplyW :: (i -> a -> prg) -> Write ctx mem i a prg
-  VectorW :: i {- really length-} -> (mem a) -> Write ctx mem i a prg
-  AppendW :: Write ctx mem i a prg -> i -> Write ctx mem i a prg 
+  ApplyW :: (i -> a -> prg) -> Write ctx mem ref i a prg
+  VectorW :: i {- really length-} -> (mem a) -> Write ctx mem ref i a prg
+  AppendW :: Write ctx mem ref i a prg -> i -> Write ctx mem ref i a prg 
   
 
 ---------------------------------------------------------------------------
@@ -121,7 +121,10 @@ data PushT ctx i b where
   Map      :: (Num i, ctx a) => PushT ctx i a -> (a -> b) -> PushT ctx i b
   Generate :: (Num i, ctx b) => i -> (i -> b) -> PushT ctx i b
   Append   :: Num i => i -> PushT ctx i b -> PushT ctx i b -> PushT ctx i b 
-  
+
+
+  Return   :: Num i => b -> PushT ctx i b
+  Bind     :: PushT ctx i a -> i -> (a -> (PushT ctx i b, i)) -> PushT ctx i b 
 ---------------------------------------------------------------------------
 -- Library functions
 ---------------------------------------------------------------------------
@@ -139,6 +142,22 @@ map f (Push p l) = Push (Map p f) l
   Push (Append l1 p1 p2) (l1 + l2) 
 
 
+instance Num i => Monad (Push ctx i) where
+  return a = Push (Return a) 1
+  (Push p l) >>= f = Push p' l'
+    where
+      -- A trick so that the data types don't depend on the type Push
+      g a = let (Push p l) = f a in (p,l)
+      h a = let (Push _ l) = f a in l
+      p' = Bind p l g
+      l' = undefined 
+         --unsafeInlinePrim $
+         --  do r <- newRef 0
+         --     apply p (BindLength h r)
+         --     readRef r
+
+
+
 ---------------------------------------------------------------------------
 -- Freeze
 ---------------------------------------------------------------------------
@@ -148,7 +167,7 @@ freeze (Push p l) =
     compile p (VectorW l (CMem name)) 
     return $ Pull (\ix -> Index name ix) l 
 
-freeze2 :: PrimMonad m => Push (Eval m)  Int a -> m (V.Vector a)
+freeze2 :: (RefMonad m r, PrimMonad m) => Push (Eval m)  Int a -> m (V.Vector a)
 freeze2 (Push p l) =
   do
     mem <- M.new l
@@ -160,18 +179,20 @@ freeze2 (Push p l) =
 -- Compile 
 ---------------------------------------------------------------------------
 data CMem a = CMem String
+data CRef a = CRef String 
     
 class  Compile a  where
-  compile :: PushT Compile Index  a -> Write Compile CMem Index a (Prg ()) -> Prg ()
+  compile :: PushT Compile Index a -> Write Compile CMem CRef Index a (Prg ()) -> Prg ()
 
-  compileW :: Write Compile CMem Index a (Prg ()) -> (Index -> a -> Prg ())
+  compileW :: Write Compile CMem CRef Index a (Prg ()) -> (Index -> a -> Prg ())
   
   
 instance Compile (Exp a) where
   compile (Generate n ixf) = \k -> PFor "v" n $ compileW k (Variable "v") (ixf (Variable "v")) 
   compile (Map p f)   = \k -> compile p (MapW k f)
   compile (Append l p1 p2) = \k -> compile p1 k >> compile p2 (AppendW k l)
-
+  compile (Return a) =  \k -> compileW k 0 a 
+  
   compileW (VectorW l (CMem name)) = \i a -> Assign name i a 
   compileW (MapW k f) = \i a -> compileW k i (f a)
   compileW (AppendW k l) = \i a -> compileW k (l+i) a 
@@ -180,26 +201,24 @@ instance Compile (Exp a) where
 -- Evaluate 
 ---------------------------------------------------------------------------
 
-class PrimMonad m => Eval m a 
-  
-  
-instance PrimMonad m => Eval m a 
+class (PrimMonad m)  => Eval m a where
+  eval :: (RefMonad m r)
+          => PushT (Eval m ) Int a
+          -> Write (Eval m ) (M.MVector (PrimState m)) r Int a (m ())
+          -> m ()  
+  evalW :: (RefMonad m r) => Write (Eval m ) (M.MVector (PrimState m)) r Int a (m ())
+           -> (Int -> a -> m ()) 
+
+instance (RefMonad m r, PrimMonad m) => Eval m a where
+  eval (Generate n ixf) = \k -> forM_ [0..n-1] $ \i ->  evalW k i (ixf i)
+  eval (Map p f)        = \k -> eval p (MapW k f)
+  eval (Append l p1 p2) = \k -> eval p1 k >> eval p2 (AppendW k l) 
+  eval (Return a)       = \k -> evalW k 0 a 
 
 
-eval :: (Eval m a)
-        => PushT (Eval m) Int a
-        -> Write (Eval m) (M.MVector (PrimState m)) Int a (m ())
-        -> m ()  
-eval (Generate n ixf) = \k -> forM_ [0..n-1] $ \i ->  evalW k i (ixf i)
-eval (Map p f)        = \k -> eval p (MapW k f)
-eval (Append l p1 p2) = \k -> eval p1 k >> eval p2 (AppendW k l) 
-
-
-evalW :: Eval m a => Write (Eval m) (M.MVector (PrimState m)) Int a (m ())
-         -> (Int -> a -> m ()) 
-evalW (VectorW l mem) = \i a -> M.write mem i a
-evalW (MapW k f)      = \i a -> evalW k i (f a)
-evalW (AppendW k l)   = \i a -> evalW k (l+i) a 
+  evalW (VectorW l mem) = \i a -> M.write mem i a
+  evalW (MapW k f)      = \i a -> evalW k i (f a)
+  evalW (AppendW k l)   = \i a -> evalW k (l+i) a 
 
 
 
@@ -229,4 +248,4 @@ test2 p = p1 ++ p1
     p1 = push p 
 
 runTest2 = freeze   (test2 input1 :: Push Compile (Exp Int) (Exp Int)) 
-evalTest2 = freeze2 (test2 input2 :: Push (Eval IO) Int Int) 
+evalTest2 = freeze2 (test2 input2 :: Push (Eval IO ) Int Int) 
