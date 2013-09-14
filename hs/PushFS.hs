@@ -223,7 +223,7 @@ ixmap f (Push p l) = Push (IxMap p f) l
 
 (++) :: Monad m =>  Push m a -> Push m a  -> Push m a
 (Push p1 l1) ++ (Push p2 l2) = 
-  Push (Append l1 p1 p1) (l1 + l2) 
+  Push (Append l1 p1 p2) (l1 + l2) 
 
 reverse :: Push m a -> Push m a
 reverse p = ixmap (\i -> (len p - 1) - i) p
