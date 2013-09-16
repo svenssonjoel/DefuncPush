@@ -30,6 +30,8 @@ import qualified Data.Vector.Mutable as M
 import Prelude hiding (reverse,scanl,(++),map )
 import qualified Prelude as P 
 
+import Data.Supply
+
 -- import Pull
 
 data Pull a = Pull (Index -> a) Length
@@ -80,12 +82,17 @@ data Prg a where
 
   Assign :: String -> Index -> Exp a -> Prg ()
 
-  Allocate :: Length -> Prg String
+  Allocate :: String -> Length -> Prg () 
+  
   Seq :: Prg a -> (a -> Prg b) -> Prg b
   Ret :: a -> Prg a
 
+  Seq_ :: Prg () -> Prg () -> Prg () 
 
+  Skip :: Prg () 
+  
 data CMem a = CMem String
+data CArray a = CArray String
 data CRef a = CRef String 
 
 
@@ -95,11 +102,11 @@ instance Monad Prg where
   (>>=)  = Seq
 
 
-nRef a = do str <- Allocate 1 
-            Assign str 0 a 
-            return (CRef str) 
-rRef (CRef str) = return (Index str 0)
-wRef (CRef r) a = Assign r 0 a 
+-- nRef a = do (CArray name)  <- Allocate 1 
+--             Assign name 0 a 
+--             return (CRef name) 
+-- rRef (CRef str) = return (Index str 0)
+-- wRef (CRef r) a = Assign r 0 a 
   
 
 printPrg :: Prg a -> (a,String)
@@ -109,7 +116,7 @@ printPrg (PFor name n prg) = ((),"for " P.++ name P.++ " in [0.." P.++ show n P.
   where
     (b,str) = printPrg prg  
 printPrg (Assign name i e) = ((),name P.++"[" P.++ show i P.++"] = " P.++ show e P.++ ";\n")
-printPrg (Allocate n) = ("fresh", "fresh = allocate(" P.++ show n P.++");\n")
+printPrg (Allocate nom n) = ((), nom P.++ " = allocate(" P.++ show n P.++");\n")
 printPrg (ma `Seq` f) = (b, s1 P.++ s2) 
   where
     (a,s1) = printPrg ma
@@ -126,7 +133,7 @@ data Write a  where
 
   ApplyW :: (Index -> a -> Prg ()) -> Write a
   
-  VectorW :: Length -> CMem a -> Write a
+  VectorW :: Prg Length -> CMem a -> Write a
   AppendW :: Write a -> Index -> Write a
 
   BindLength :: (a -> Prg Length) -> CRef Length -> Write a 
@@ -136,14 +143,14 @@ data Write a  where
 ---------------------------------------------------------------------------
 
 data PushT b where
-  Map      :: Compile a => PushTM a -> (a -> b) -> PushT b
+  Map      :: (Compile b, Compile a) => PushTM a -> (a -> b) -> PushT b
   Generate :: Length -> (Index -> b) -> PushT b
   Append   :: Prg Length -> PushTM b -> PushTM b -> PushT b 
 
 
 data PushTM b where 
   Return   :: b -> PushTM b
-  Bind     :: Compile a => PushT a -> (a -> (PushTM b, Prg Index)) -> PushTM  b 
+  Bind     :: Compile a => (PushT a, Prg Length)  -> (a -> (PushTM b, Prg Index)) -> PushTM  b 
 
 instance Monad PushTM  where
   return = Return
@@ -152,18 +159,18 @@ instance Monad PushTM  where
    -- h :: a -> (PushTM b, Prg Length)
    -- l :: Prg Length
    -- pta :: PushT a 
-  (Bind pta h) >>= k = Bind pta  (\x ->  let (ptb,l) = h x
-                                         in (do b <- ptb 
-                                                k b,l ))
+  (Bind (pta,m)  h) >>= k = Bind (pta,m)  (\x ->  let (ptb,l) = h x
+                                                  in (do b <- ptb 
+                                                         k b,l ))
 
 instance Monad Push where
   return a = Push (return a) (return 1)
   pa >>= k = Push ((pushF pa) >>= (\x -> pushF (k x)))
 
              (return 10)
-             -- Return 10 is a cheat!
+             -- 'return 10' is a cheat!
              -- Want it to be (compile pa (BindLength k something))
-  
+             -- Big quesion is, can I run compile in this monad instance?  
 
 pushF :: Push a -> PushTM a
 pushF (Push p _) = p
@@ -173,7 +180,7 @@ pushL (Push _ l) = l
 
 -- Odd type
 liftPTM :: Compile a => PushT a -> Prg Length -> PushTM a
-liftPTM  p l = Bind p (\a -> (Return a,l))
+liftPTM  p l = Bind (p,l) (\a -> (Return a,l))
 
 ---------------------------------------------------------------------------
 -- Library functions
@@ -227,21 +234,22 @@ concat :: Push (Push a) -> Push a
 concat (Push p l) = undefined 
   
 
-{- 
+
 
 
 ---------------------------------------------------------------------------
 -- Freeze
 ---------------------------------------------------------------------------
-freeze (Push p l) =
-  do
-    l' <- l 
-    name <- Allocate l'
-    compile p (VectorW l' (CMem name)) 
-    return $ Pull (\ix -> Index name ix) l' 
+--freeze (Push p l) =
+--  do
+--    l' <- l 
+--    name <- Allocate l'
+--    let (a,prg) = compileM p (VectorW l' (CMem name))
+--    prg
+--    return $ Pull (\ix -> Index name ix) l' 
 
 
- {- 
+{- 
 
 freeze2 :: (RefMonad m r, PrimMonad m) => Push (Eval m) m  Int a -> m (V.Vector a)
 freeze2 (Push p l) =
@@ -255,28 +263,80 @@ freeze2 (Push p l) =
 -- Compile 
 ---------------------------------------------------------------------------
 
--} 
-class  Compile a  where
-  compile :: PushT a -> Write a -> Prg ()
+class Compile a where
 
-  compileW :: Write a -> (Index -> a -> Prg ())
+  compile :: Supply Int -> PushT a -> Write a -> (CArray a, Prg ())
   
-{-  
+  compileM :: Supply Int -> PushTM a -> Write a -> (CArray a, Prg ())
+
+  --compileW 
+
 instance Compile (Exp a) where
-  compile (Generate n ixf) = \k -> PFor "v" n $ compileW k (Variable "v") (ixf (Variable "v")) 
-  compile (Map p f)   = \k -> compile p (MapW k f)
-  compile (Append l p1 p2) = \k ->
-    do
-      compile p1 k
-      l' <- l 
-      compile p2 (AppendW k l')
-  compile (Return a) =  \k -> compileW k 0 a 
+
+  compileM s (Return a) k = (arr, do Allocate nom 1  
+                                     Assign nom 0 a )
+    where
+      i = supplyValue s
+      arr@(CArray nom)  = CArray $ "arr" P.++ show i
+
+
+  compileM s (Bind (ma,l) h) k = undefined 
+    where
+      (arr,prg1) = compile s ma wf
+
+      -- need to compile a "length program" and a "compute program"
+      -- 
+      
+      (s1,s2) = split2 s 
+      v1 = supplyValue s1
+      carr@(CArray nom) = CArray $ "arr" P.++ show v1
+      wf = VectorW l (CMem nom) 
+  
+
+  compile s p k = undefined 
+      
+  
+
+      
+                          
+  --compileM s (Bind ma h) k = 
+  --  (b,prg1 `Seq_` prg2)  
+  --  where 
+  --   (a,prg1) = compile ma k
+  --   (b,prg2) = compileM (h a) k 
+
+{-
+class  Compile a  where
+  
+  compile :: PushT a -> Write a -> (a,Prg ())
+
+  compileM :: PushTM a -> Write a -> (a,Prg ())
+  
+  compileW :: Write a -> Index -> a -> Prg ()
+  
+
+instance Compile (Exp a) where
+  compile (Generate n ixf) k =  (Variable "dummy", PFor "v" n $ compileW k (Variable "v") (ixf (Variable "v")))
+  compile (Map p f)  k  =  compileM p (MapW k f)
+  compile (Append l p1 p2) k = (a,prg) 
+    where
+      (a,prg1) = compileM p1 k
+      --l' <- l  
+      -- (b,prg2) 
+
+      prg = do
+        prg1 
+        l' <- l
+        let (b,prg2) = compileM p2 (AppendW k l')
+        prg2     
+  
+
   
   compileW (VectorW l (CMem name)) = \i a -> Assign name i a 
   compileW (MapW k f) = \i a -> compileW k i (f a)
   compileW (AppendW k l) = \i a -> compileW k (l+i) a 
-
-
+-} 
+{- 
 compileLength :: PushT a -> Write a -> Prg ()
 compileLength p (BindLength f r) = undefined 
 
