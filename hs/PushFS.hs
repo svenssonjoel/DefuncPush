@@ -56,7 +56,7 @@ data Write a m where
 
   AppendW :: Write a m -> Index -> Write a m
   
-  BindW :: RefMonad m r => Length -> (a -> (PushT b m,Length)) -> Write b m -> r Index -> Write a m
+  BindW :: RefMonad m r =>  (a -> (PushT b m,Length)) -> Write b m -> r Index -> Write a m
 
   BindLength :: RefMonad m r => (a -> Length) -> r Index -> Write a m
 
@@ -83,10 +83,10 @@ applyW (VectorW v) = \i a -> M.write v i a
 
 applyW (AppendW k l) = \i a -> applyW k (l + i) a
 
-applyW (BindW l f k r) = \i a -> do s <- readRef r
-                                    let (q,m) = (f a)
-                                    apply q (AppendW k s)
-                                    writeRef r (s + m)
+applyW (BindW f k r) = \i a -> do s <- readRef r
+                                  let (q,m) = (f a)
+                                  apply q (AppendW k s)
+                                  writeRef r (s + m)
 
 applyW (BindLength f r) = \_ a -> do let l'' = f a
                                      modifyRef r (+l'')
@@ -114,7 +114,7 @@ data PushT b m  where
   Zip :: PushT a m -> (Index -> b) -> PushT (a,b) m 
   
   Return :: b -> PushT b m
-  Bind :: RefMonad m r => PushT a m -> Length -> (a -> (PushT b m,Length)) -> PushT b m
+  Bind :: RefMonad m r => PushT a m -> (a -> (PushT b m,Length)) -> PushT b m
   
   Flatten :: RefMonad m r => (Index -> (PushT b m,Length)) -> Length -> PushT b m
 
@@ -166,8 +166,8 @@ apply (Zip p ixf) = \k -> let k' = ZipW k ixf
 
 
 apply (Return a) = \k -> applyW k 0 a
-apply (Bind p l f) = \k -> do r <- newRef 0
-                              apply p (BindW l f k r)
+apply (Bind p f) = \k -> do r <- newRef 0
+                            apply p (BindW f k r)
 
 apply (Seq p1 p2) = \k -> apply p1 k >> apply p2 k
   
@@ -320,7 +320,7 @@ instance (PrimMonad m, RefMonad m r) => Monad (Push m) where
       -- A trick so that the data types don't depend on the type Push
       g a = let (Push p l) = f a in (p,l)
       h a = let (Push _ l) = f a in l
-      p' = Bind p l g
+      p' = Bind p g
       l' = unsafeInlinePrim $
            do r <- newRef 0
               apply p (BindLength h r)

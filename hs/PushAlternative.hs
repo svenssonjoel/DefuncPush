@@ -12,9 +12,9 @@
 {-# LANGUAGE ScopedTypeVariables #-} 
 {-# LANGUAGE NoMonomorphismRestriction #-} 
 
-{-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE KindSignatures #-}
-{-# LANGUAGE FunctionalDependencies #-}
+
+
+
 
 module PushAlternative where
 
@@ -70,7 +70,7 @@ instance Show (Exp a) where
 -- Push array
 --------------------------------------------------------------------------- 
 
-data  Push a  = Push (PushT a)  (Prg Length)
+data  Push a  = Push (PushTM a)  (Prg Length)
 
 ---------------------------------------------------------------------------
 -- Base language 
@@ -136,51 +136,98 @@ data Write a  where
 ---------------------------------------------------------------------------
 
 data PushT b where
-  Map      :: Compile a => PushT a -> (a -> b) -> PushT b
+  Map      :: Compile a => PushTM a -> (a -> b) -> PushT b
   Generate :: Length -> (Index -> b) -> PushT b
-  Append   :: Prg Length -> PushT b -> PushT b -> PushT b 
+  Append   :: Prg Length -> PushTM b -> PushTM b -> PushT b 
 
 
-  Return   :: b -> PushT b
-  Bind     :: PushT a -> Prg Length -> (a -> (PushT b, Prg Index)) -> PushT  b 
+data PushTM b where 
+  Return   :: b -> PushTM b
+  Bind     :: Compile a => PushT a -> (a -> (PushTM b, Prg Index)) -> PushTM  b 
+
+instance Monad PushTM  where
+  return = Return
+  (Return a) >>= k = k a
+   -- k :: b -> PushTM c
+   -- h :: a -> (PushTM b, Prg Length)
+   -- l :: Prg Length
+   -- pta :: PushT a 
+  (Bind pta h) >>= k = Bind pta  (\x ->  let (ptb,l) = h x
+                                         in (do b <- ptb 
+                                                k b,l ))
+
+instance Monad Push where
+  return a = Push (return a) (return 1)
+  pa >>= k = Push ((pushF pa) >>= (\x -> pushF (k x)))
+
+             (return 10)
+             -- Return 10 is a cheat!
+             -- Want it to be (compile pa (BindLength k something))
+  
+
+pushF :: Push a -> PushTM a
+pushF (Push p _) = p
+pushL :: Push a -> Prg Length
+pushL (Push _ l) = l 
+
+
+-- Odd type
+liftPTM :: Compile a => PushT a -> Prg Length -> PushTM a
+liftPTM  p l = Bind p (\a -> (Return a,l))
+
 ---------------------------------------------------------------------------
 -- Library functions
 ---------------------------------------------------------------------------
 
 
-push :: Pull a -> Push a
+push :: Compile a => Pull a -> Push a
 push (Pull ixf n) =
-  Push (Generate n ixf) (return n) -- Now we require prg is monad 
+  Push (liftPTM (Generate n ixf) (return n)) (return n) -- Now we require prg is monad 
 
 
-map :: Compile a => (a -> b) -> Push a -> Push b
-map f (Push p l) = Push (Map p f) l 
+map :: (Compile b, Compile a) => (a -> b) -> Push a -> Push b
+map f (Push p l) = Push (liftPTM (Map p f) l) l 
 
 
 
-(++) :: (Num i) => Push a -> Push a -> Push a
+(++) :: (Compile a, Num i) => Push a -> Push a -> Push a
 (Push p1 l1) ++ (Push p2 l2) =
-  Push (Append l1 p1 p2) (do l1' <- l1
-                             l2' <- l2
-                             return $ l1' + l2') 
+  Push (liftPTM (Append l1 p1 p2) nl) nl
+
+        where nl = (do l1' <- l1
+                       l2' <- l2
+                       return $ l1' + l2') 
+
+-- instance Monad Push where
+--   return a = Push (Return a) (return 1)
+--   (Push (Return a) l)  >>= k = k a
+--   (Push (Bind pt l h) m) >>= k =
+--     Push (Bind pt m (\x -> (let (y,z) = h x
+--                             in Bind (Return y) z y' <- y 
+--                               let (Push p' l') = k y'
+--                               p', l)))
+--          (return 10) -- Cheat!
+  
+-- instance  Monad Push where
+--   return a = Push (Return a) (return 1)
+--   (Push p l) >>= f = Push p' l'
+--     where
+--       -- A trick so that the data types don't depend on the type Push
+--       g a = let (Push p l) = f a in (p,l)
+--       h a = let (Push _ l) = f a in l
+--       p' = Bind p l g
+--       -- This has to be expressed in prg alone
 
 
-instance  Monad Push where
-  return a = Push (Return a) (return 1)
-  (Push p l) >>= f = Push p' l'
-    where
-      -- A trick so that the data types don't depend on the type Push
-      g a = let (Push p l) = f a in (p,l)
-      h a = let (Push _ l) = f a in l
-      p' = Bind p l g
-      -- This has to be expressed in prg alone
+--       l' =  do r <- nRef 0 
+--                compile p (BindLength h r)
+--                rRef r
 
+concat :: Push (Push a) -> Push a
+concat (Push p l) = undefined 
+  
 
-      l' =  do r <- nRef 0 
-               compileLength p (BindLength h r)
-               rRef r
-
---      (Push q _) = map (\_ -> (0 :: Exp Int)) (Push p l) 
+{- 
 
 
 ---------------------------------------------------------------------------
@@ -208,13 +255,13 @@ freeze2 (Push p l) =
 -- Compile 
 ---------------------------------------------------------------------------
 
-
+-} 
 class  Compile a  where
   compile :: PushT a -> Write a -> Prg ()
 
   compileW :: Write a -> (Index -> a -> Prg ())
   
-  
+{-  
 instance Compile (Exp a) where
   compile (Generate n ixf) = \k -> PFor "v" n $ compileW k (Variable "v") (ixf (Variable "v")) 
   compile (Map p f)   = \k -> compile p (MapW k f)
@@ -231,7 +278,7 @@ instance Compile (Exp a) where
 
 
 compileLength :: PushT a -> Write a -> Prg ()
-compileLength p (BindLength f r) = 
+compileLength p (BindLength f r) = undefined 
 
 ---------------------------------------------------------------------------
 --
@@ -258,3 +305,4 @@ runTest2 = freeze   (test2 input1 :: Push (Exp Int))
 
 
 
+-} 

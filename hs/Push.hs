@@ -127,21 +127,40 @@ replicate n a = Push (\k -> forM_ [0..n-1] $ \i -> k i a) n
 ---------------------------------------------------------------------------
 instance (PrimMonad m, RefMonad m r) => Monad (Push m) where
   return a = Push (\k -> k 0 a) 1
-  (Push p l) >>= f = Push p' l'
-    where
-      p' k' = do r <- newRef 0
-                 p $ \i a ->
-                   do s <- readRef r
-                      let (Push q m) = (f a)
-                      q (\j b -> k' (s + j) b)
-                      writeRef r (s + m)
-      l' = unsafeInlinePrim $
-           do r <- newRef 0
-              p $ \_ a -> 
-                do let (Push _ l'') = f a
-                   modifyRef r (+l'')
-              readRef r
-            
+  -- (Push p l) >>= f = Push p' l'
+  --   where
+  --     p' k' = do r <- newRef 0
+  --                p $ \i a ->
+  --                  do s <- readRef r
+  --                     let (Push q m) = (f a)
+  --                     q (\j b -> k' (s + j) b)
+  --                     writeRef r (s + m)
+  --     l' = unsafeInlinePrim $
+  --          do r <- newRef 0
+  --             p $ \_ a -> 
+  --               do let (Push _ l'') = f a
+  --                  modifyRef r (+l'')
+  --             readRef r
+  p >>= f = concat (map f p)
+              
+
+-- Same as join 
+concat :: (RefMonad m r, PrimMonad m) => Push m (Push m a) -> Push m a
+concat (Push p l) = Push q l'
+  where
+    q k = do r <- newRef 0
+             p $ \i a ->
+               do s <- readRef r
+                  let (Push q' m) = a
+                  q' (\j b -> k (s+j) b)
+                  writeRef r (s + m)
+    l' = unsafeInlinePrim $
+         do r <- newRef 0
+            p $ \_ a -> 
+              do let (Push _ l'') = a
+                 modifyRef r (+l'')
+            readRef r
+           
 
 
 flatten :: (PrimMonad m, RefMonad m r) => Pull (Push m a) -> Push m a
