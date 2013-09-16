@@ -35,7 +35,8 @@ data Pull a = Pull (Index -> a) Length
 --------------------------------------------------------------------------- 
 
 data Push m a =
-  Push ((Either () (Index -> a -> m ())) -> m (Either Length ())) 
+  -- Push ((Either () (Index -> a -> m ())) -> m (Either Length ()))
+  Push ((Index -> a -> m ()) -> m ()) (m Length) 
   -- Thought: Left input -> Left output
   --          Right input -> Right output 
 
@@ -44,39 +45,35 @@ data Push m a =
 ---------------------------------------------------------------------------
 
 len :: Monad m => Push m a -> m Length
-len (Push p) =
-  do
-    (Left n) <- p (Left ())
-    return n 
+len (Push p l) = l 
  
 
+(<:) :: Push m a -> (Index -> a -> m ()) -> m ()
+(Push p l) <: f = p f 
 
 (++) :: Monad m => Push m a -> Push m a  -> Push m a
-Push p1 ++ Push p2 = Push q
+Push p1 l1 ++ Push p2 l2 = Push q l
   where
-    q (Left ()) = do
-      (Left l1) <- p1 (Left ())
-      (Left l2) <- p2 (Left ())
-      return $ Left (l1 + l2)
-    q (Right k) = do
-      (Left l1) <- p1 (Left ())
-      -- l2 <- len p2 
+    q k = do
+
+      l1' <- l1 
            
-      p1 $ Right k
-      p2 $ Right $ \i a -> k (l1 + i) a
-      return (Right ())
+      p1 k
+      p2 $ \i a -> k (l1' + i) a
+    l = do
+      l1' <- l1
+      l2' <- l2
+      return $ l1' + l2' 
 
 
 
 
 
 ixmap :: Monad m => (Index -> m Index) -> Push m a -> Push m a
-ixmap f (Push p) = Push q
+ixmap f p = Push q (len p) 
   where
-    q (Left ()) = p (Left ())
-  
-    q (Right k) =
-      p $ Right $ \i a ->
+    q k =
+      p <: \i a ->
       do
         i' <- f i
         k i' a 
@@ -92,33 +89,30 @@ reverse p = ixmap (\i ->
 
 
 instance (PrimMonad m, RefMonad m r) => Monad (Push m) where
-  return a = Push $ \k -> case k of
-                            (Right k') -> do
-                                            res <- (k' 0 a)
-                                            return $ Right res 
-                            (Left ())  -> return $ Left 1 
-  (Push p) >>= f = Push p'
+  return a = Push  (\k -> k 0 a) (return 1)
+      
+  p >>= f = Push p' l
     where
-      p' (Right k') = do r <- newRef 0
-                         p $ Right $ \i a ->
-                           do s <- readRef r
-                              let (Push q) = (f a)
-                              q $ Right (\j b -> k' (s + j) b)
-                              (Left m') <- q (Left ()) 
-                              writeRef r (s + m')
-      p' (Left ()) = do r <- newRef 0
-                        p $ Right $ \_ a -> 
-                          do let (Push q) = f a
-                             (Left n)  <- q (Left ())    
-                             modifyRef r (+n)
-                        nl <-readRef r
-                        return (Left nl) 
+      p' k = do r <- newRef 0
+                p <: ( \i a ->
+                        do s <- readRef r
+                           let (Push q m) = (f a)
+                           q (\j b -> k (s + j) b)
+                           m' <- m
+                           writeRef r (s + m'))
+      l = do r <- newRef 0
+             p <: ( \_ a -> 
+               do let (Push q n') = f a
+                  n  <- n'
+                  modifyRef r (+n))
+             readRef r
+                  
 
 
 
 
 
-      -- l' = 
+
             
 
 -- [1,2,3] -> [1,2,2,3,3,3]
@@ -126,11 +120,11 @@ repeat :: (RefMonad m r, PrimMonad m) => Push m Int -> Push m Int
 repeat p = p >>= (\a -> replicate a a)
 
 replicate :: (RefMonad m r, PrimMonad m) => Int -> a -> Push m a 
-replicate n a = Push p -- (\k -> ) n 
+replicate n a = Push p (return n)
   where
-    p (Right k) = do forM_ [0..n-1] $ \i -> k i a
-                     return (Right ())
-    p (Left ()) = return (Left n) 
+    p k = forM_ [0..n-1] $ \i -> k i a
+                   
+  
                      
     
  
@@ -139,20 +133,16 @@ replicate n a = Push p -- (\k -> ) n
 --------------------------------------------------------------------------- 
 
 freeze :: PrimMonad m => Push m a -> m (V.Vector a)
-freeze (Push p) =
+freeze (Push p n) =
   do
-     (Left s)  <- p (Left ())
+     s  <- n -- compute the length 
      arr <- M.new s
-     p $ Right (\i a -> M.write arr i a)
+     p (\i a -> M.write arr i a)
      V.freeze arr 
 
 push (Pull ixf n) =
-  Push $ \k ->
-         case k of
-           Right k' -> do forM_ [0..(n-1)] $ \i ->
-                             k' i (ixf i)
-                          return $ Right ()
-           Left () -> return $ Left n 
+  Push (\k -> forM_ [0..(n-1)] $ \i ->
+         k i (ixf i) ) (return n)
 
 ---------------------------------------------------------------------------
 -- Simple program
