@@ -52,6 +52,27 @@ push (Pull ixf n) =
     q (AddD m l1 l2) k = do p1 l1 k
                             p2 l2 (\i a -> k (i + getL l1) a)
 
+map ::  (a -> b) -> Push m a -> Push m b
+map f (Push p l) = Push (\ ld k -> p ld (\i a -> k i (f a)) ) l
+
+-- concat :: Push m (Push m a) -> Push m a
+-- concat (Push p l) = Push q l'
+--   where
+--     q rl k = do r <- newRef (Linear 0)
+--                 p l $ \i a ->
+--                   do s <- readRef r
+--                      let (Push q' m) = a
+--                      q' (\j b -> k (Add s j) b)
+--                      writeRef r (Add s + m)
+--     l' = undefined 
+               
+
+repeat :: Monad m => Push m Int -> Push m (Push m Int)
+repeat = map (\a -> replicate a a) 
+
+-- Dont know what will happen here !
+replicate :: Monad m => Int -> a -> Push m a
+replicate n a = Push (\l k -> forM_ [0..(getL l - 1)] $ \ix -> k ix a ) (Linear n) 
 
 computeLength :: LengthC -> LengthDone
 computeLength (Linear i) = LinearD i
