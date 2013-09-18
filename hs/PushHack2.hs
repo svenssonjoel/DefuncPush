@@ -25,7 +25,21 @@ data LengthC = Linear Int
              deriving Show 
 data LengthDone = LinearD Int
                 | AddD Int LengthDone LengthDone
-                deriving Show 
+                deriving Show
+
+
+-- thought
+data L = Base Int
+       | AddL (Maybe Int) L L
+       deriving Show
+{-
+   Freeze computes all "uncomputed lengths.
+   Programs that needs to compute lengths, does so.
+     But that will mean that the Length recipie needs to depend on
+     the push array computation. 
+-} 
+
+                
 
 getL :: LengthDone -> Int
 getL (LinearD i) = i
@@ -61,6 +75,7 @@ map f (Push p l) = Push (\k -> p (\ld i a -> k ld i (f a)) ) l
 concat :: (RefMonad m r, Monad m) => Push m (Push m a) -> Push m a
 concat (Push p l) = Push q l'
   where
+    -- Still recalculates lengths
     q k = do r <- newRef (LinearD 0)
              p $ \rl i a ->
                do s <- readRef r
@@ -86,7 +101,6 @@ getNth 0 (LinearD n) = LinearD n
 getNth 0 (AddD _ a b) = a
 getNth n (AddD _ a b) = getNth (n-1) b
 getNth n (LinearD i) = error $ "Linear " P.++ show i
---getNth m (AddD i a b) = error $ show i P.++ " " P.++ show a P.++ " " P.++ show b
 
 repeat :: Monad m => Push m Int -> Push m (Push m Int)
 repeat = map (\a -> replicate a a) 
@@ -105,11 +119,6 @@ computeLength (Add l1 l2) =
         i2 = getL l2'
     
     return $ AddD (i1+i2) l1' l2'
-  -- where
-  --   l1' = 
-  --   l2' = 
-  --   i1  = getL l1'
-  --   i2  = getL l2'
 
 freeze :: PrimMonad m => Push m a -> m (V.Vector a)
 freeze (Push p n) =
@@ -121,8 +130,6 @@ freeze (Push p n) =
      arr <- M.new s
      p (\l' i a -> M.write arr i a)
      V.freeze arr 
-
-
 
 input2 = Pull (\i -> i) 10
 
