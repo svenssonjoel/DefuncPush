@@ -148,9 +148,6 @@ data Write a  where
   AppendW :: Write a -> Index -> Write a
 
 
-  --BindW :: (a -> (PushTM b,Prg Length)) -> Prg Length -> Write b -> CRef Length -> Write a
-  --BindLength :: (a -> Prg Length) -> CRef Length -> Write a 
-
 ---------------------------------------------------------------------------
 -- Push Language
 ---------------------------------------------------------------------------
@@ -159,41 +156,8 @@ data PushT b where
   Map      :: Compile a => PushT a -> (a -> b) -> PushT b
   Generate :: Length -> (Index -> b) -> PushT b
   Append   :: Prg Length -> PushT b -> PushT b -> PushT b 
-  Concat   :: PushT (PushT a) -> PushT a 
-
---data PushTM b where 
---  Return   :: b -> PushTM b
---  Bind     :: (Compile a) => (PushT a, Prg Length)  -> (a -> (PushTM b, Prg Index)) -> PushTM  b 
-
---instance Monad PushTM  where
---  return = Return
---  (Return a) >>= k = k a
-   -- k :: b -> PushTM c
-   -- h :: a -> (PushTM b, Prg Length)
-   -- l :: Prg Length
-   -- pta :: PushT a 
---  (Bind (pta,m)  h) >>= k = Bind (pta,m)  (\x ->  let (ptb,l) = h x
---                                                  in (do b <- ptb 
---                                                         k b,l ))
-
---instance Monad Push where
---  return a = Push (return a) (return 1)
---  pa >>= k = Push ((pushF pa) >>= (\x -> pushF (k x)))
-
---             (return 10)
-             -- 'return 10' is a cheat!
-             -- Want it to be (compile pa (BindLength k something))
-             -- Big quesion is, can I run compile in this monad instance?  
-
---pushF :: Push a -> PushTM a
---pushF (Push p _) = p
---pushL :: Push a -> Prg Length
---pushL (Push _ l) = l 
 
 
--- Odd type
---liftPTM :: Compile a => PushT a -> Prg Length -> PushTM a
---liftPTM  p l = Bind (p,l) (\a -> (Return a,l))
 
 ---------------------------------------------------------------------------
 -- Library functions
@@ -218,76 +182,8 @@ map f (Push p l) = Push (Map p f) l
                        l2' <- l2
                        return $ l1' + l2') 
 
--- instance Monad Push where
---   return a = Push (Return a) (return 1)
---   (Push (Return a) l)  >>= k = k a
---   (Push (Bind pt l h) m) >>= k =
---     Push (Bind pt m (\x -> (let (y,z) = h x
---                             in Bind (Return y) z y' <- y 
---                               let (Push p' l') = k y'
---                               p', l)))
---          (return 10) -- Cheat!
-  
--- instance  Monad Push where
---   return a = Push (Return a) (return 1)
---   (Push p l) >>= f = Push p' l'
---     where
---       -- A trick so that the data types don't depend on the type Push
---       g a = let (Push p l) = f a in (p,l)
---       h a = let (Push _ l) = f a in l
---       p' = Bind p l g
---       -- This has to be expressed in prg alone
 
 
---       l' =  do r <- nRef 0 
---                compile p (BindLength h r)
---                rRef r
-
-concat :: Push (Push a) -> Push a
-concat (Push p l) =
-  Push (Concat (pushP p)) (l {- cheat -} )
-    where
-      pushP :: PushT (Push a) -> PushT (PushT a)
-      pushP p =  
-    
-  
--- where
---     q k = do r <- newRef 0
---              p $ \i a ->
---                do s <- readRef r
---                   let (Push q' m) = a
---                   q' (\j b -> k (s+j) b)
---                   writeRef r (s + m)
---     l' = unsafeInlinePrim $
---          do r <- newRef 0
---             p $ \_ a -> 
---               do let (Push _ l'') = a
---                  modifyRef r (+l'')
---             readRef r
-
-
----------------------------------------------------------------------------
--- Freeze
----------------------------------------------------------------------------
---freeze (Push p l) =
---  do
---    l' <- l 
---    name <- Allocate l'
---    let (a,prg) = compileM p (VectorW l' (CMem name))
---    prg
---    return $ Pull (\ix -> Index name ix) l' 
-
-
-{- 
-
-freeze2 :: (RefMonad m r, PrimMonad m) => Push (Eval m) m  Int a -> m (V.Vector a)
-freeze2 (Push p l) =
-  do
-    mem <- M.new l
-    eval p (VectorW l mem) 
-    V.freeze mem  -- can pull from and maintain same interface! 
-
--} 
 ---------------------------------------------------------------------------
 -- Compile 
 ---------------------------------------------------------------------------
@@ -314,80 +210,14 @@ instance Compile (Exp a) where
   assign   (CArray name _) i a = Assign name i (injectE a) 
 
 
---compileM :: Compile a => Supply Int -> PushTM a -> Write a -> (CArray a, Prg ())
---compileM s (Return a) k = (arr, do allocate arr  
---                                   assign arr (injectE (0 :: Exp Int)) a )
---    where
---      i = supplyValue s
---      arr  = mkArray i (injectE (1 :: Exp Int)) -- CArray $ "arr" P.++ show i
-
-
---compileM s (Bind (ma,l) h) k = compileW s1 ma (BindW h l k cref) --  undefined 
---    where
-      --(arr,prg1) = compile s ma wf
-
-      -- need to compile a "length program" and a "compute program"
-      -- 
-
-      -- 
-        
-
---      v2 = supplyValue s2
---      cref = mkRef v2 (injectE 0) 
-        
---      (s1,s2) = split2 s 
-      --v1 = supplyValue s1
-      --carr@(CArray nom) = CArray $ "arr" P.++ show v1
-      --wf = VectorW l (CMem nom) 
-
-
 compileW :: Compile a => Supply Int -> PushT a -> Write a -> (CArray a,Prg ())
 compileW s p k = undefined 
 
 compile :: Compile a => Supply Int -> PushT a -> Write a -> (CArray a, Prg ())
-compile s p k = undefined 
+compile s (Map pt f) k = undefined
       
   
 
-      
-                          
-  --compileM s (Bind ma h) k = 
-  --  (b,prg1 `Seq_` prg2)  
-  --  where 
-  --   (a,prg1) = compile ma k
-  --   (b,prg2) = compileM (h a) k 
-
-{-
-class  Compile a  where
-  
-  compile :: PushT a -> Write a -> (a,Prg ())
-
-  compileM :: PushTM a -> Write a -> (a,Prg ())
-  
-  compileW :: Write a -> Index -> a -> Prg ()
-  
-
-instance Compile (Exp a) where
-  compile (Generate n ixf) k =  (Variable "dummy", PFor "v" n $ compileW k (Variable "v") (ixf (Variable "v")))
-  compile (Map p f)  k  =  compileM p (MapW k f)
-  compile (Append l p1 p2) k = (a,prg) 
-    where
-      (a,prg1) = compileM p1 k
-      --l' <- l  
-      -- (b,prg2) 
-
-      prg = do
-        prg1 
-        l' <- l
-        let (b,prg2) = compileM p2 (AppendW k l')
-        prg2     
-  
-
-  
-  compileW (VectorW l (CMem name)) = \i a -> Assign name i a 
-  compileW (MapW k f) = \i a -> compileW k i (f a)
-  compileW (AppendW k l) = \i a -> compileW k (l+i) a 
--} 
 {- 
 compileLength :: PushT a -> Write a -> Prg ()
 compileLength p (BindLength f r) = undefined 

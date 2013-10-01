@@ -24,6 +24,15 @@ import qualified Prelude as P
 import Pull
 
 ---------------------------------------------------------------------------
+-- Monad with For
+---------------------------------------------------------------------------
+class Monad m => ForMonad m where
+  for_ :: Enum a => (a,a) -> (a -> m b) -> m () 
+
+instance ForMonad IO where
+  for_ (a,b) f = forM_ [a..b] f
+  
+---------------------------------------------------------------------------
 --
 ---------------------------------------------------------------------------
 
@@ -34,6 +43,7 @@ type Length = Int
 -- Push array
 --------------------------------------------------------------------------- 
 data Push m a = Push (PushT a m)  Length 
+
 
 ---------------------------------------------------------------------------
 -- Write Function language
@@ -104,9 +114,9 @@ data PushT b m  where
   Map  :: PushT a m -> (a -> b) -> PushT b m
   IMap :: PushT a m -> (a -> Index -> b) -> PushT b m
   Append :: Monad m => Index -> PushT b m -> PushT b m -> PushT b m
-  Generate :: Monad m => (Index -> b) -> Length -> PushT b m
-  Iterate :: RefMonad m r => (b -> b) -> b -> Length -> PushT b m
-  Unpair :: Monad m => (Index -> (b,b)) -> Length -> PushT b m
+  Generate :: ForMonad m => (Index -> b) -> Length -> PushT b m
+  Iterate :: (ForMonad m, RefMonad m r) => (b -> b) -> b -> Length -> PushT b m
+  Unpair :: ForMonad m => (Index -> (b,b)) -> Length -> PushT b m
   UnpairP :: Monad m => PushT (b,b) m -> PushT b m 
 
   Interleave :: Monad m => PushT a m -> PushT a m -> PushT a m 
@@ -116,19 +126,19 @@ data PushT b m  where
   Return :: b -> PushT b m
   Bind :: RefMonad m r => PushT a m -> (a -> (PushT b m,Length)) -> PushT b m
   
-  Flatten :: RefMonad m r => (Index -> (PushT b m,Length)) -> Length -> PushT b m
+  Flatten :: (ForMonad m, RefMonad m r) => (Index -> (PushT b m,Length)) -> Length -> PushT b m
 
-  Scanl :: RefMonad m r => (a -> b -> a) -> a -> (Index -> b) -> Length -> PushT a m 
+  Scanl :: (ForMonad m, RefMonad m r) => (a -> b -> a) -> a -> (Index -> b) -> Length -> PushT a m 
 
 
-  Force :: PrimMonad m => PushT a m -> Length -> PushT a m 
+  Force :: (ForMonad m, PrimMonad m) => PushT a m -> Length -> PushT a m 
   
   -- Unsafe
 
   IxMap :: PushT b m -> (Index -> Index) -> PushT b m
   Seq :: Monad m => PushT b m -> PushT b m -> PushT b m
-  Scatter :: Monad m => (Index -> (b,Index)) -> Length -> PushT b m
-  Stride  :: Monad m => Index -> Length -> Length -> (Index -> b) -> PushT b m 
+  Scatter :: ForMonad m => (Index -> (b,Index)) -> Length -> PushT b m
+  Stride  :: ForMonad m => Index -> Length -> Length -> (Index -> b) -> PushT b m 
 
 ---------------------------------------------------------------------------
 -- Apply
@@ -141,18 +151,18 @@ apply (IxMap p f) = \k -> apply p (IxMapW k f)
 apply (Append l p1 p2) = \k -> apply p1 k >>
                                apply p2 (AppendW k l)
 
-apply (Generate ixf n) = (\k -> forM_ [0..(n-1)] $ \i ->
+apply (Generate ixf n) = (\k -> for_ (0,(n-1)) $ \i ->
                            applyW k i (ixf i))
 apply (Iterate f a n) = \k ->
   do
     sum <- newRef a 
-    forM_ [0..(n-1)] $ \i ->
+    for_ (0,(n-1)) $ \i ->
       do
         val <- readRef sum
         applyW k i val 
         writeRef sum (f val) 
         
-apply (Unpair f n) = \k -> forM_ [0..(n-1)] $ \i ->
+apply (Unpair f n) = \k -> for_ (0,(n-1)) $ \i ->
                              applyW k (i*2) (fst (f i)) >>
                              applyW k (i*2+1) (snd (f i))
                              
@@ -175,14 +185,14 @@ apply (Bind p f) = \k -> do r <- newRef 0
 apply (Seq p1 p2) = \k -> apply p1 k >> apply p2 k
   
 
-apply (Scatter f n) = \k -> forM_ [0..(n-1)] $ \i ->
+apply (Scatter f n) = \k -> for_ (0,(n-1)) $ \i ->
                               applyW k (snd (f i)) (fst (f i))
 
 apply (Flatten ixfp n) =
   \k ->
           do
           r <- newRef 0 
-          forM_ [0..n-1] $ \i -> do
+          for_ (0,n-1) $ \i -> do
             s <- readRef r
             let (p,m) = ixfp i
             apply p (AppendW k s) 
@@ -191,13 +201,13 @@ apply (Flatten ixfp n) =
 apply (Scanl f init ixf n) = \k ->
   do
     s <- newRef init
-    forM_ [0..n-1] $ \ix -> do
+    for_ (0,n-1) $ \ix -> do
       modifyRef s (`f` (ixf ix))
       readRef s >>= applyW k ix 
 
 
 apply (Stride start step n f) =
-  \k -> forM_ [0..n-1] $ \i ->
+  \k -> for_ (0,n-1) $ \i ->
          applyW k (start + step*i) (f i) 
 
 
@@ -206,7 +216,7 @@ apply (Force p l) =
            apply p (VectorW arr) -- (\i a -> M.write arr i a)
            imm <- V.freeze arr
            let (Pull ixf _) = pullFrom imm
-           forM_ [0..l-1] $ \ix ->
+           for_ (0,l-1) $ \ix ->
              applyW k ix (ixf ix) 
 
 
@@ -240,13 +250,13 @@ ixmap f (Push p l) = Push (IxMap p f) l
 reverse :: Push m a -> Push m a
 reverse p = ixmap (\i -> (len p - 1) - i) p
 
-iterate :: RefMonad m r => Length -> (a -> a) -> a -> Push m a
+iterate :: (ForMonad m, RefMonad m r) => Length -> (a -> a) -> a -> Push m a
 iterate n f a = Push (Iterate f a n) n 
 
 ---------------------------------------------------------------------------
 -- unpair / interleave 
 --------------------------------------------------------------------------- 
-unpair :: Monad m => Pull (a,a) -> Push m a
+unpair :: ForMonad m => Pull (a,a) -> Push m a
 unpair (Pull ixf n) =
   Push (Unpair ixf n) (2*n)
 
@@ -263,7 +273,7 @@ interleave (Push p m) (Push q n) =
 ---------------------------------------------------------------------------
 -- Zips
 --------------------------------------------------------------------------- 
-zipPush :: Monad m => Pull a -> Pull a -> Push m a
+zipPush :: ForMonad m => Pull a -> Pull a -> Push m a
 zipPush p1 p2 = unpair $  zipPull p1 p2 
 
 zipSpecial :: Monad m => Push m a -> Pull b -> Push m (a,b)
@@ -274,7 +284,7 @@ zipSpecial (Push p n1) (Pull ixf n2) =
 ---------------------------------------------------------------------------
 --
 --------------------------------------------------------------------------- 
-scatter :: Monad m => Pull (a,Index) -> Push m a
+scatter :: ForMonad m => Pull (a,Index) -> Push m a
 scatter (Pull ixf n) =
   Push (Scatter ixf n) n 
 
@@ -284,7 +294,7 @@ before (Push p1 n1) (Push p2 n2) =
     Push (Seq p1 p2) (max n1 n2) 
 
 
-flatten :: (PrimMonad m, RefMonad m r) => Pull (Push m a) -> Push m a
+flatten :: (ForMonad m, PrimMonad m, RefMonad m r) => Pull (Push m a) -> Push m a
 flatten (Pull ixf n) =
   Push (Flatten (pFun . ixf) n) l
   where
@@ -292,7 +302,7 @@ flatten (Pull ixf n) =
     l = sum [len (ixf i) | i <- [0..n-1]]
     pFun (Push p n) = (p,n) 
 
-scanl :: (PullFrom c, RefMonad m r) => (a -> b -> a) -> a -> c b -> Push m a
+scanl :: (ForMonad m, PullFrom c, RefMonad m r) => (a -> b -> a) -> a -> c b -> Push m a
 scanl f init v = Push (Scanl f init ixf n) n
   where
     (Pull ixf n) = pullFrom v
@@ -307,13 +317,13 @@ foldPush f a (Push p m) =
     
 
 --                   start     step
-stride :: Monad m => Index -> Length -> Pull a -> Push m a 
+stride :: ForMonad m => Index -> Length -> Pull a -> Push m a 
 stride start step (Pull ixf n) =
   Push (Stride start step n ixf) m
   where m = (start + n*step) - 1
 
 
-zipByStride :: Monad m => Pull a -> Pull a -> Push m a
+zipByStride :: ForMonad m => Pull a -> Pull a -> Push m a
 zipByStride p1 p2 = stride 0 2 p1 `before` stride 1 2 p2 
 
 zipByPermute :: Monad m => Push m a -> Push m a -> Push m a
@@ -356,7 +366,7 @@ class ToPush m arr where
 instance Monad m => ToPush m (Push m) where
   toPush = id
 
-instance (PullFrom c, Monad m) => ToPush m c where
+instance (PullFrom c, ForMonad m) => ToPush m c where
   toPush = push . pullFrom
 
 
@@ -377,7 +387,7 @@ toVector = freeze
 -- A defunctionalisable "freeze", called force. 
 ---------------------------------------------------------------------------
      
-force :: PrimMonad m => Push m a -> Push m a
+force :: (ForMonad m, PrimMonad m) => Push m a -> Push m a
 force (Push p l) = Push (Force p l) l
   
 ---------------------------------------------------------------------------
@@ -386,7 +396,7 @@ force (Push p l) = Push (Force p l) l
 
 input11 = Pull (\i -> i) 16
 
-test11 :: PrimMonad m => Pull Int -> Push m Int
+test11 :: (ForMonad m, PrimMonad m) => Pull Int -> Push m Int
 test11 = map (+1) . force . map (+1) . push  
 
 runTest11 = toVector (test11 input11 :: Push IO Int) 
