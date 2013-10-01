@@ -18,7 +18,7 @@ import Data.RefMonad
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as M 
 
-import Prelude hiding (reverse,scanl)
+import Prelude hiding (reverse,scanl,map)
 import qualified Prelude as P 
 
 import Pull
@@ -119,6 +119,9 @@ data PushT b m  where
   Flatten :: RefMonad m r => (Index -> (PushT b m,Length)) -> Length -> PushT b m
 
   Scanl :: RefMonad m r => (a -> b -> a) -> a -> (Index -> b) -> Length -> PushT a m 
+
+
+  Force :: PrimMonad m => PushT a m -> Length -> PushT a m 
   
   -- Unsafe
 
@@ -196,6 +199,15 @@ apply (Scanl f init ixf n) = \k ->
 apply (Stride start step n f) =
   \k -> forM_ [0..n-1] $ \i ->
          applyW k (start + step*i) (f i) 
+
+
+apply (Force p l) =
+  \k -> do arr <- M.new l
+           apply p (VectorW arr) -- (\i a -> M.write arr i a)
+           imm <- V.freeze arr
+           let (Pull ixf _) = pullFrom imm
+           forM_ [0..l-1] $ \ix ->
+             applyW k ix (ixf ix) 
 
 
 ---------------------------------------------------------------------------
@@ -359,3 +371,21 @@ freeze (Push p l) =
      apply p (VectorW arr)
      V.freeze arr 
 
+
+---------------------------------------------------------------------------
+-- A defunctionalisable "freeze", called force. 
+---------------------------------------------------------------------------
+     
+force :: PrimMonad m => Push m a -> Push m a
+force (Push p l) = Push (Force p l) l
+  
+---------------------------------------------------------------------------
+-- Simple program
+---------------------------------------------------------------------------
+
+input11 = Pull (\i -> i) 16
+
+test11 :: PrimMonad m => Pull Int -> Push m Int
+test11 = map (+1) . force . map (+1) . push  
+
+runTest11 = freeze (test11 input11 :: Push IO Int) 

@@ -353,6 +353,18 @@ freeze (Push p l) =
      V.freeze arr 
 
 
+force :: PrimMonad m => Push m a -> Push m a
+force (Push p l) = Push q l
+  where
+    q k = do
+      arr <- M.new l
+      p (\i a -> M.write arr i a)
+      imm <- V.freeze arr
+      let (Pull ixf _) = pullfrom imm
+      forM_ [0..l-1] $ \ix ->
+        k ix (ixf ix) 
+
+
 ---------------------------------------------------------------------------
 -- Simple program
 ---------------------------------------------------------------------------
@@ -493,3 +505,14 @@ test10 = repeat . push
 
 runTest10 = freeze (test10 input10 :: Push IO Int) 
 
+
+---------------------------------------------------------------------------
+-- Simple program
+---------------------------------------------------------------------------
+
+input11 = Pull (\i -> i) 16
+
+test11 :: PrimMonad m => Pull Int -> Push m Int
+test11 = map (+1) . force . map (+1) . push  
+
+runTest11 = freeze (test11 input11 :: Push IO Int) 
