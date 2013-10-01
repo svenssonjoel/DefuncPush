@@ -369,8 +369,9 @@ freeze (Push p l) =
   do
      arr <- M.new l
      apply p (VectorW arr)
-     V.freeze arr 
-
+     V.freeze arr
+     
+toVector = freeze 
 
 ---------------------------------------------------------------------------
 -- A defunctionalisable "freeze", called force. 
@@ -388,4 +389,4 @@ input11 = Pull (\i -> i) 16
 test11 :: PrimMonad m => Pull Int -> Push m Int
 test11 = map (+1) . force . map (+1) . push  
 
-runTest11 = freeze (test11 input11 :: Push IO Int) 
+runTest11 = toVector (test11 input11 :: Push IO Int) 
