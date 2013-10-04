@@ -3,6 +3,7 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-} 
 
 {-# LANGUAGE ScopedTypeVariables #-}  -- for the bind example only
 
@@ -13,6 +14,9 @@ module PushFS where
 import Control.Monad
 import Control.Monad.ST
 import Control.Monad.Primitive
+
+import Control.Monad.Writer
+import Control.Monad.State 
 import Data.RefMonad
 
 import qualified Data.Vector as V
@@ -31,7 +35,7 @@ class Monad m => ForMonad m where
 
 instance ForMonad IO where
   for_ (a,b) f = forM_ [a..b] f
-  
+
 ---------------------------------------------------------------------------
 --
 ---------------------------------------------------------------------------
@@ -400,3 +404,74 @@ test11 :: (ForMonad m, PrimMonad m) => Pull Int -> Push m Int
 test11 = map (+1) . force . map (+1) . push  
 
 runTest11 = toVector (test11 input11 :: Push IO Int) 
+
+
+
+---------------------------------------------------------------------------
+-- Compile 
+---------------------------------------------------------------------------
+
+type Id = String
+
+type Type = Int -- dummy 
+
+data Code = Skip
+          | Code :>>: Code
+          | For Id Length Code
+          | Allocate Id Length Type 
+          | Write Id Exp Exp
+          | Read Id Exp Id
+
+data CodeT a where
+  ReturnRef :: CMRef Exp -> CodeT (CMRef a)
+
+
+instance Monoid Code where
+  mempty = Skip 
+  mappend a b = a :>>: b 
+
+
+
+data Exp = Var Id
+         | Literal Int
+         | Index Id Exp
+         | Exp :+: Exp
+         | Exp :-: Exp 
+         | Exp :*: Exp 
+
+
+data CMRef a where
+  CMRef :: Id -> CMRef Exp  
+
+newtype CompileMonad a = CM (StateT Integer (Writer Code) a)
+     deriving (Monad, MonadState Integer, MonadWriter Code)                          
+
+newId :: CompileMonad String 
+newId = do i <- get
+           put (i + 1)
+           return $ "v" P.++ show i 
+
+typeOf :: a -> Type
+typeOf = undefined 
+
+instance RefMonad CompileMonad CMRef where
+  newRef a = do i <- newId
+                tell $ Allocate i 1 (typeOf a)
+                return $ CMRef i 
+             
+  readRef (CMRef i) = do v <- newId 
+                         tell $ Read i (Literal 1) v
+                         return $ Var v 
+  writeRef = undefined 
+  
+
+--instance ForMonad CompileMonad where 
+
+class Expable a where
+  toExp :: a -> Exp
+  fromExp :: Exp -> a
+
+class MonadRef ctxt m r | m -> r, m -> ctxt where
+  newRef :: ctxt a => a -> m (r a)
+  readRef :: ctxt a => r a -> m a
+  writeRef :: ctxt a => r a -> a -> m ()

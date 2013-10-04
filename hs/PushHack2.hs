@@ -16,6 +16,11 @@ import Prelude hiding (reverse,zip,concat,map,scanl,replicate,repeat, (++) )
 
 import qualified Prelude as P
 
+
+import Data.Supply
+
+import qualified Data.Map as M
+import Data.Maybe 
 ---------------------------------------------------------------------------
 -- Strange Push arrays
 ---------------------------------------------------------------------------
@@ -29,7 +34,7 @@ data LengthDone = LinearD Int
 
 
 -- thought
-data L = Base Int
+data L = Computed Int -- index to map
        | AddL (Maybe Int) L L
        deriving Show
 {-
@@ -43,9 +48,19 @@ data L = Base Int
 
 getL :: LengthDone -> Int
 getL (LinearD i) = i
-getL (AddD i _ _) = i 
+getL (AddD i _ _) = i
+
+get_ :: M.Map Int Int -> L -> Int
+get_ m (Computed i) = fromJust (M.lookup i m ) 
+get_ m (AddL (Just i) a b) = fromJust (M.lookup i m)
+get_ m (Add_ Nothing _ _ ) = error "get_ uncomputed" 
 
 data Push m a = Push ((LengthDone -> Int -> a -> m ()) -> m ()) (m LengthC)
+
+
+
+data MemoryDesc = MD (M.Map Int Int)  (Supply Int)
+data PushX m a = PushX (MemoryDesc -> (MemoryDesc,(L -> Int -> a -> m ()) -> m (), m L)) 
 
 
 ---------------------------------------------------------------------------
@@ -68,6 +83,34 @@ push (Pull ixf n) =
   where
     q k = do p1 k
              p2 (\ (AddD _ l1 l2) i a -> k l2 (i + getL l1) a)
+
+computeL :: Monad m => M.Map Int Int -> L -> m (M.Map Int Int , L)
+computeL m (Computed i) = return $ Computed i
+computeL m (Add_ Nothing l1 l2) =
+  do
+    (m1,l1') <- computeL m l1
+    (m2,l2') <- computeL m l2
+    let i1 = get_ l1'
+        i2 = get_ l2'
+    
+    return $ AddD (Just (i1+i2)) l1' l2'
+
+
+
+(++*) (PushX mf) (PushX mf2) = PushX mf' 
+  where
+    
+    mf' (MD m vs) = (MD m'' vs'',q,do l1' <- l1
+                                      l2' <- l2
+                                      return (AddL Nothing l1' l2')) 
+      where
+        q k = do p1 k
+                 p2 (\ (AddL _ l1 l2) i a -> k l2 (i + get_ m l1) a) 
+        --(s1,s2,vs') = split3 vs
+        ((MD m' vs'),p1,l1) = mf (MD m vs)
+        
+        ((MD m'' vs''),p2,l2) = mf2 (MD m' vs'') 
+
 
 map ::  (a -> b) -> Push m a -> Push m b
 map f (Push p l) = Push (\k -> p (\ld i a -> k ld i (f a)) ) l
