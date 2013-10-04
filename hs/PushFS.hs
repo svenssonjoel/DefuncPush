@@ -39,7 +39,7 @@ import GHC.Prim (Constraint)
 --  for_ :: (Num a, Enum a, ctxt a) => a -> (a -> m ()) -> m () 
 
 
--- is this a hack ? 
+-- is this a hack ?
 class Monad m => ForMonad ctxt m | m -> ctxt where
   for_ :: ctxt a => Int -> (a -> m ()) -> m () 
 
@@ -51,7 +51,10 @@ instance ForMonad Enum IO where
   for_ n f = forM_ [0..n-1] (f . toEnum)
 
 
-
+instance RefMonad m r => MonadRef ctxt m r where
+  newRef_ = newRef
+  readRef_ = readRef
+  writeRef_ = writeRef
 
 ---------------------------------------------------------------------------
 --
