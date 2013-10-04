@@ -30,17 +30,28 @@ import qualified Prelude as P
 
 import Pull
 
+
+import GHC.Prim (Constraint) 
 ---------------------------------------------------------------------------
 -- Monad with For
 ---------------------------------------------------------------------------
-class Monad m => ForMonad m where
-  for_ :: (Num a, Enum a) => a -> (a -> m b) -> m () 
+--class Monad m => ForMonad ctxt m | m -> ctxt where
+--  for_ :: (Num a, Enum a, ctxt a) => a -> (a -> m ()) -> m () 
 
-instance ForMonad IO where
-  for_ n f = forM_ [0..n-1] f
 
--- Will for be "problematic" as well. a:s vs exp:s ??
-  --  Also this for is higher order..
+-- is this a hack ? 
+class Monad m => ForMonad ctxt m | m -> ctxt where
+  for_ :: ctxt a => Int -> (a -> m ()) -> m () 
+
+
+--class Empty a
+--instance Empty a 
+
+instance ForMonad Enum IO where
+  for_ n f = forM_ [0..n-1] (f . toEnum)
+
+
+
 
 ---------------------------------------------------------------------------
 --
@@ -124,9 +135,9 @@ data PushT b m  where
   Map  :: PushT a m -> (a -> b) -> PushT b m
   IMap :: PushT a m -> (a -> Index -> b) -> PushT b m
   Append :: Monad m => Index -> PushT b m -> PushT b m -> PushT b m
-  Generate :: ForMonad m => (Index -> b) -> Length -> PushT b m
-  Iterate :: (ForMonad m, RefMonad m r) => (b -> b) -> b -> Length -> PushT b m
-  Unpair :: ForMonad m => (Index -> (b,b)) -> Length -> PushT b m
+  Generate :: (ForMonad ctxt m, ctxt Length)  => (Index -> b) -> Length -> PushT b m
+  Iterate :: (ForMonad ctxt m, RefMonad m r, ctxt Length) => (b -> b) -> b -> Length -> PushT b m
+  Unpair :: (ForMonad ctxt m, ctxt Length) => (Index -> (b,b)) -> Length -> PushT b m
   UnpairP :: Monad m => PushT (b,b) m -> PushT b m 
 
   Interleave :: Monad m => PushT a m -> PushT a m -> PushT a m 
@@ -136,19 +147,19 @@ data PushT b m  where
   Return :: b -> PushT b m
   Bind :: RefMonad m r => PushT a m -> (a -> (PushT b m,Length)) -> PushT b m
   
-  Flatten :: (ForMonad m, RefMonad m r) => (Index -> (PushT b m,Length)) -> Length -> PushT b m
+  Flatten :: (ForMonad ctxt m, RefMonad m r, ctxt Length) => (Index -> (PushT b m,Length)) -> Length -> PushT b m
 
-  Scanl :: (ForMonad m, RefMonad m r) => (a -> b -> a) -> a -> (Index -> b) -> Length -> PushT a m 
+  Scanl :: (ForMonad ctxt m, RefMonad m r, ctxt Length) => (a -> b -> a) -> a -> (Index -> b) -> Length -> PushT a m 
 
 
-  Force :: (ForMonad m, PrimMonad m) => PushT a m -> Length -> PushT a m 
+  Force :: (ForMonad ctxt m, PrimMonad m, ctxt Length) => PushT a m -> Length -> PushT a m 
   
   -- Unsafe
 
   IxMap :: PushT b m -> (Index -> Index) -> PushT b m
   Seq :: Monad m => PushT b m -> PushT b m -> PushT b m
-  Scatter :: ForMonad m => (Index -> (b,Index)) -> Length -> PushT b m
-  Stride  :: ForMonad m => Index -> Length -> Length -> (Index -> b) -> PushT b m 
+  Scatter :: (ForMonad ctxt m, ctxt Length) => (Index -> (b,Index)) -> Length -> PushT b m
+  Stride  :: (ForMonad ctxt m, ctxt Length) => Index -> Length -> Length -> (Index -> b) -> PushT b m 
 
 ---------------------------------------------------------------------------
 -- Apply
@@ -260,13 +271,13 @@ ixmap f (Push p l) = Push (IxMap p f) l
 reverse :: Push m a -> Push m a
 reverse p = ixmap (\i -> (len p - 1) - i) p
 
-iterate :: (ForMonad m, RefMonad m r) => Length -> (a -> a) -> a -> Push m a
+iterate :: (ForMonad ctxt m, RefMonad m r, ctxt Length) => Length -> (a -> a) -> a -> Push m a
 iterate n f a = Push (Iterate f a n) n 
 
 ---------------------------------------------------------------------------
 -- unpair / interleave 
 --------------------------------------------------------------------------- 
-unpair :: ForMonad m => Pull (a,a) -> Push m a
+unpair :: (ForMonad ctxt m, ctxt Length)  => Pull (a,a) -> Push m a
 unpair (Pull ixf n) =
   Push (Unpair ixf n) (2*n)
 
@@ -283,7 +294,7 @@ interleave (Push p m) (Push q n) =
 ---------------------------------------------------------------------------
 -- Zips
 --------------------------------------------------------------------------- 
-zipPush :: ForMonad m => Pull a -> Pull a -> Push m a
+zipPush :: (ForMonad ctxt m, ctxt Length) => Pull a -> Pull a -> Push m a
 zipPush p1 p2 = unpair $  zipPull p1 p2 
 
 zipSpecial :: Monad m => Push m a -> Pull b -> Push m (a,b)
@@ -294,7 +305,7 @@ zipSpecial (Push p n1) (Pull ixf n2) =
 ---------------------------------------------------------------------------
 --
 --------------------------------------------------------------------------- 
-scatter :: ForMonad m => Pull (a,Index) -> Push m a
+scatter :: (ForMonad ctxt m, ctxt Length)  => Pull (a,Index) -> Push m a
 scatter (Pull ixf n) =
   Push (Scatter ixf n) n 
 
@@ -304,7 +315,7 @@ before (Push p1 n1) (Push p2 n2) =
     Push (Seq p1 p2) (max n1 n2) 
 
 
-flatten :: (ForMonad m, PrimMonad m, RefMonad m r) => Pull (Push m a) -> Push m a
+flatten :: (ForMonad ctxt m, PrimMonad m, RefMonad m r, ctxt Length) => Pull (Push m a) -> Push m a
 flatten (Pull ixf n) =
   Push (Flatten (pFun . ixf) n) l
   where
@@ -312,7 +323,7 @@ flatten (Pull ixf n) =
     l = sum [len (ixf i) | i <- [0..n-1]]
     pFun (Push p n) = (p,n) 
 
-scanl :: (ForMonad m, PullFrom c, RefMonad m r) => (a -> b -> a) -> a -> c b -> Push m a
+scanl :: (ForMonad ctxt m, PullFrom c, RefMonad m r, ctxt Length) => (a -> b -> a) -> a -> c b -> Push m a
 scanl f init v = Push (Scanl f init ixf n) n
   where
     (Pull ixf n) = pullFrom v
@@ -327,13 +338,13 @@ foldPush f a (Push p m) =
     
 
 --                   start     step
-stride :: ForMonad m => Index -> Length -> Pull a -> Push m a 
+stride :: (ForMonad ctxt m, ctxt Length) => Index -> Length -> Pull a -> Push m a 
 stride start step (Pull ixf n) =
   Push (Stride start step n ixf) m
   where m = (start + n*step) - 1
 
 
-zipByStride :: ForMonad m => Pull a -> Pull a -> Push m a
+zipByStride :: (ForMonad ctxt m, ctxt Length) => Pull a -> Pull a -> Push m a
 zipByStride p1 p2 = stride 0 2 p1 `before` stride 1 2 p2 
 
 zipByPermute :: Monad m => Push m a -> Push m a -> Push m a
@@ -376,7 +387,7 @@ class ToPush m arr where
 instance Monad m => ToPush m (Push m) where
   toPush = id
 
-instance (PullFrom c, ForMonad m) => ToPush m c where
+instance (PullFrom c, ForMonad ctxt m, ctxt Length) => ToPush m c where
   toPush = push . pullFrom
 
 
@@ -397,7 +408,7 @@ toVector = freeze
 -- A defunctionalisable "freeze", called force. 
 ---------------------------------------------------------------------------
      
-force :: (ForMonad m, PrimMonad m) => Push m a -> Push m a
+force :: (ForMonad ctxt m, PrimMonad m, ctxt Length) => Push m a -> Push m a
 force (Push p l) = Push (Force p l) l
   
 ---------------------------------------------------------------------------
@@ -406,7 +417,7 @@ force (Push p l) = Push (Force p l) l
 
 input11 = Pull (\i -> i) 16
 
-test11 :: (ForMonad m, PrimMonad m) => Pull Int -> Push m Int
+test11 :: (ForMonad ctxt m, PrimMonad m,ctxt Length) => Pull Int -> Push m Int
 test11 = map (+1) . force . map (+1) . push  
 
 runTest11 = toVector (test11 input11 :: Push IO Int) 
@@ -447,7 +458,12 @@ data CMRef a where
   CMRef :: Id -> CMRef a --Exp  
 
 newtype CompileMonad a = CM (StateT Integer (Writer Code) a)
-     deriving (Monad, MonadState Integer, MonadWriter Code)                          
+     deriving (Monad, MonadState Integer, MonadWriter Code)
+
+
+runCM :: Integer -> CompileMonad a -> Code
+runCM = undefined 
+
 
 newId :: CompileMonad String 
 newId = do i <- get
@@ -468,8 +484,10 @@ instance MonadRef Expable CompileMonad CMRef where
   writeRef_ (CMRef i) e = tell $ Write i (Literal 1) (toExp e)
   
 
--- Strange
--- instance ForMonad CompileMonad where
+instance ForMonad Expable CompileMonad where
+   for_ n f = do i <- newId
+                 tell $ For i n $ runCM 1 (f (fromExp (Var i)))
+                
   
 
 class Expable a where
