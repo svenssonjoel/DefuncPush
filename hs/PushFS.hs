@@ -4,6 +4,8 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-} 
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE ConstraintKinds #-}
 
 {-# LANGUAGE ScopedTypeVariables #-}  -- for the bind example only
 
@@ -441,7 +443,7 @@ data Exp = Var Id
 
 
 data CMRef a where
-  CMRef :: Id -> CMRef Exp  
+  CMRef :: Id -> CMRef a --Exp  
 
 newtype CompileMonad a = CM (StateT Integer (Writer Code) a)
      deriving (Monad, MonadState Integer, MonadWriter Code)                          
@@ -454,15 +456,15 @@ newId = do i <- get
 typeOf :: a -> Type
 typeOf = undefined 
 
-instance RefMonad CompileMonad CMRef where
-  newRef a = do i <- newId
-                tell $ Allocate i 1 (typeOf a)
-                return $ CMRef i 
+instance MonadRef Expable CompileMonad CMRef where
+  newRef_ a = do i <- newId
+                 tell $ Allocate i 1 (typeOf a)
+                 return $ CMRef i 
              
-  readRef (CMRef i) = do v <- newId 
-                         tell $ Read i (Literal 1) v
-                         return $ Var v 
-  writeRef = undefined 
+  readRef_ (CMRef i) = do v <- newId 
+                          tell $ Read i (Literal 1) v
+                          return $ fromExp (Var v)
+  writeRef_ = undefined 
   
 
 --instance ForMonad CompileMonad where 
@@ -471,7 +473,12 @@ class Expable a where
   toExp :: a -> Exp
   fromExp :: Exp -> a
 
-class MonadRef ctxt m r | m -> r, m -> ctxt where
-  newRef :: ctxt a => a -> m (r a)
-  readRef :: ctxt a => r a -> m a
-  writeRef :: ctxt a => r a -> a -> m ()
+instance Expable Exp where
+  toExp = id
+  fromExp = id
+
+
+class Monad m => MonadRef ctxt m r | m -> r, m -> ctxt where
+  newRef_ :: ctxt a => a -> m (r a)
+  readRef_ :: ctxt a => r a -> m a
+  writeRef_ :: ctxt a => r a -> a -> m ()
