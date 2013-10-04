@@ -41,14 +41,14 @@ import GHC.Prim (Constraint)
 
 -- is this a hack ?
 class Monad m => ForMonad ctxt m | m -> ctxt where
-  for_ :: ctxt a => Int -> (a -> m ()) -> m () 
+  for_ :: ctxt a => a -> (a -> m ()) -> m () 
 
 
 --class Empty a
 --instance Empty a 
 
 instance ForMonad Enum IO where
-  for_ n f = forM_ [0..n-1] (f . toEnum)
+  for_ n f = forM_ [0..(fromEnum n)-1] (f . toEnum)
 
 
 instance RefMonad m r => MonadRef ctxt m r where
@@ -437,7 +437,7 @@ type Type = Int -- dummy
 
 data Code = Skip
           | Code :>>: Code
-          | For Id Length Code
+          | For Id Exp Code
           | Allocate Id Length Type 
           | Write Id Exp Exp
           | Read Id Exp Id
@@ -489,7 +489,7 @@ instance MonadRef Expable CompileMonad CMRef where
 
 instance ForMonad Expable CompileMonad where
    for_ n f = do i <- newId
-                 tell $ For i n $ runCM 1 (f (fromExp (Var i)))
+                 tell $ For i (toExp n) $ runCM 1 (f (fromExp (Var i)))
                 
   
 
