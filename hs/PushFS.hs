@@ -6,6 +6,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-} 
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE KindSignatures #-} 
 
 {-# LANGUAGE ScopedTypeVariables #-}  -- for the bind example only
 
@@ -33,10 +34,13 @@ import Pull
 -- Monad with For
 ---------------------------------------------------------------------------
 class Monad m => ForMonad m where
-  for_ :: Enum a => (a,a) -> (a -> m b) -> m () 
+  for_ :: (Num a, Enum a) => a -> (a -> m b) -> m () 
 
 instance ForMonad IO where
-  for_ (a,b) f = forM_ [a..b] f
+  for_ n f = forM_ [0..n-1] f
+
+-- Will for be "problematic" as well. a:s vs exp:s ??
+  --  Also this for is higher order..
 
 ---------------------------------------------------------------------------
 --
@@ -157,18 +161,18 @@ apply (IxMap p f) = \k -> apply p (IxMapW k f)
 apply (Append l p1 p2) = \k -> apply p1 k >>
                                apply p2 (AppendW k l)
 
-apply (Generate ixf n) = (\k -> for_ (0,(n-1)) $ \i ->
+apply (Generate ixf n) = (\k -> for_ n $ \i ->
                            applyW k i (ixf i))
 apply (Iterate f a n) = \k ->
   do
     sum <- newRef a 
-    for_ (0,(n-1)) $ \i ->
+    for_ n $ \i ->
       do
         val <- readRef sum
         applyW k i val 
         writeRef sum (f val) 
         
-apply (Unpair f n) = \k -> for_ (0,(n-1)) $ \i ->
+apply (Unpair f n) = \k -> for_ n $ \i ->
                              applyW k (i*2) (fst (f i)) >>
                              applyW k (i*2+1) (snd (f i))
                              
@@ -191,14 +195,14 @@ apply (Bind p f) = \k -> do r <- newRef 0
 apply (Seq p1 p2) = \k -> apply p1 k >> apply p2 k
   
 
-apply (Scatter f n) = \k -> for_ (0,(n-1)) $ \i ->
+apply (Scatter f n) = \k -> for_ n $ \i ->
                               applyW k (snd (f i)) (fst (f i))
 
 apply (Flatten ixfp n) =
   \k ->
           do
           r <- newRef 0 
-          for_ (0,n-1) $ \i -> do
+          for_ n $ \i -> do
             s <- readRef r
             let (p,m) = ixfp i
             apply p (AppendW k s) 
@@ -207,13 +211,13 @@ apply (Flatten ixfp n) =
 apply (Scanl f init ixf n) = \k ->
   do
     s <- newRef init
-    for_ (0,n-1) $ \ix -> do
+    for_ n $ \ix -> do
       modifyRef s (`f` (ixf ix))
       readRef s >>= applyW k ix 
 
 
 apply (Stride start step n f) =
-  \k -> for_ (0,n-1) $ \i ->
+  \k -> for_ n $ \i ->
          applyW k (start + step*i) (f i) 
 
 
@@ -222,7 +226,7 @@ apply (Force p l) =
            apply p (VectorW arr) -- (\i a -> M.write arr i a)
            imm <- V.freeze arr
            let (Pull ixf _) = pullFrom imm
-           for_ (0,l-1) $ \ix ->
+           for_ l $ \ix ->
              applyW k ix (ixf ix) 
 
 
@@ -427,12 +431,9 @@ data Code = Skip
 data CodeT a where
   ReturnRef :: CMRef Exp -> CodeT (CMRef a)
 
-
 instance Monoid Code where
   mempty = Skip 
   mappend a b = a :>>: b 
-
-
 
 data Exp = Var Id
          | Literal Int
@@ -467,7 +468,9 @@ instance MonadRef Expable CompileMonad CMRef where
   writeRef_ = undefined 
   
 
---instance ForMonad CompileMonad where 
+-- Strange
+-- instance ForMonad CompileMonad where
+  
 
 class Expable a where
   toExp :: a -> Exp
