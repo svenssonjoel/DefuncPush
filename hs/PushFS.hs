@@ -465,7 +465,7 @@ instance MonadRef Expable CompileMonad CMRef where
   readRef_ (CMRef i) = do v <- newId 
                           tell $ Read i (Literal 1) v
                           return $ fromExp (Var v)
-  writeRef_ = undefined 
+  writeRef_ (CMRef i) e = tell $ Write i (Literal 1) (toExp e)
   
 
 -- Strange
