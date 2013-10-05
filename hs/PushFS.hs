@@ -447,7 +447,12 @@ runTest11 = toVector (test11 input11 :: Push IO Int)
 
 runTest11' = do { s <- runTest11; (getElems s)} 
 
-compileTest11 = runCM 0 $ toVector (test11 input11 :: Push CompileMonad Int) 
+-- Måste nog vara Exps ?? 
+input11' = Pull (\i -> (Literal i)) 16
+test11' :: (ForMonad ctxt m,ctxt Length) => Pull Exp -> Push m Exp
+test11' = map (+1)  . map (+1) . push  
+
+compileTest11 = runCM 0 $ toVector (test11' input11' :: Push CompileMonad Exp) 
 
 
 ---------------------------------------------------------------------------
@@ -482,6 +487,14 @@ data Exp = Var Id
          | Exp :-: Exp 
          | Exp :*: Exp 
          deriving Show 
+
+instance Num Exp where
+  (+) = (:+:)
+  (-) = (:-:)
+  (*) = (:*:)
+  abs = error "abs: Not implemented"
+  signum = error "Signum: Not implemented" 
+  fromInteger = Literal . fromInteger
 
 data CMRef a where
   CMRef :: Id -> CMRef a --Exp  
@@ -545,7 +558,7 @@ instance Expable Exp where
 instance Expable Int where
   toExp = Literal
   fromExp (Literal i)  = i --- 
-  fromExp _ = error "Not a Literal" 
+  fromExp e = error $ "Not a Literal: " P.++ show e 
 
 class Monad m => MonadRef ctxt m r | m -> r, m -> ctxt where
   newRef_ :: ctxt a => a -> m (r a)
