@@ -22,8 +22,13 @@ import Control.Monad.Writer
 import Control.Monad.State 
 import Data.RefMonad
 
-import qualified Data.Vector as V
-import qualified Data.Vector.Mutable as M 
+--import qualified Data.Vector as V
+--import qualified Data.Vector.Mutable as M 
+
+-- replaces the above
+import Data.Array.MArray hiding (freeze)
+import Data.Array.IO hiding (freeze)
+import qualified Data.Array.IO as A 
 
 import Prelude hiding (reverse,scanl,map)
 import qualified Prelude as P 
@@ -44,17 +49,27 @@ class Monad m => ForMonad ctxt m | m -> ctxt where
   for_ :: ctxt a => Int -> (a -> m ()) -> m () 
 
 
---class Empty a
---instance Empty a 
-
 instance ForMonad Enum IO where
   for_ n f = forM_ [0..n-1] (f . toEnum)
-
 
 instance RefMonad m r => MonadRef ctxt m r where
   newRef_ = newRef
   readRef_ = readRef
   writeRef_ = writeRef
+
+---------------------------------------------------------------------------
+-- Monad with Memory
+---------------------------------------------------------------------------
+class Monad m => MemMonad ctxt mem m | m -> mem, m -> ctxt where
+  allocate :: Length -> m (mem a)
+  write :: (ctxt Index, ctxt a) => mem a -> Index -> a -> m () 
+
+class Empty a
+instance Empty a
+
+instance MemMonad Empty (IOArray Int) IO where
+  allocate n = newArray_ (0,n-1)
+  write = writeArray 
 
 ---------------------------------------------------------------------------
 --
@@ -86,15 +101,15 @@ data Write a m where
   -- Felt awkward when writing this down 
   ZipW  :: Write (a,b) m -> (Index -> b) -> Write a m 
 
-  VectorW :: PrimMonad m => M.MVector (PrimState m) a -> Write a m
+  VectorW :: (ctxt a, ctxt Index,  MemMonad ctxt mem m) => mem a -> Write a m
 
   AppendW :: Write a m -> Index -> Write a m
   
-  BindW :: RefMonad m r =>  (a -> (PushT b m,Length)) -> Write b m -> r Index -> Write a m
+  -- BindW :: MonadRef ctxt m r =>  (a -> (PushT b m,Length)) -> Write b m -> r Index -> Write a m
 
-  BindLength :: RefMonad m r => (a -> Length) -> r Index -> Write a m
+  -- BindLength :: MonadRef ctxt m r => (a -> Length) -> r Index -> Write a m
 
-  FoldW :: RefMonad m r => r a -> (a -> a -> a) ->  Write a m
+  FoldW :: (MonadRef ctxt m r, ctxt a) => r a -> (a -> a -> a) ->  Write a m
 ---------------------------------------------------------------------------
 -- Apply Write 
 ---------------------------------------------------------------------------
@@ -113,23 +128,25 @@ applyW (Odds  k) = \i a -> applyW k (1*2+1) a
 applyW (ZipW k ixf) = \i a -> applyW k i (a, ixf i) 
 
 
-applyW (VectorW v) = \i a -> M.write v i a
+applyW (VectorW v) = \i a -> write v i a
 
 applyW (AppendW k l) = \i a -> applyW k (l + i) a
 
-applyW (BindW f k r) = \i a -> do s <- readRef r
-                                  let (q,m) = (f a)
-                                  apply q (AppendW k s)
-                                  writeRef r (s + m)
+-- applyW (BindW f k r) = \i a -> do s <- readRef_ r
+--                                   let (q,m) = (f a)
+--                                   apply q (AppendW k s)
+--                                   writeRef_ r (s + m)
 
-applyW (BindLength f r) = \_ a -> do let l'' = f a
-                                     modifyRef r (+l'')
+-- applyW (BindLength f r) = \_ a -> do let l'' = f a
+--                                      s <- readRef_ r
+--                                      writeRef_ r (s + l'') 
+--                                      -- modifyRef r (+l'')
 
 applyW (FoldW r f) = \i b -> 
   do
-    v <- readRef r
+    v <- readRef_ r
     let v' = f v b
-    writeRef r v'
+    writeRef_ r v'
 
 ---------------------------------------------------------------------------
 -- Push Language
@@ -147,8 +164,8 @@ data PushT b m  where
   
   Zip :: PushT a m -> (Index -> b) -> PushT (a,b) m 
   
-  Return :: b -> PushT b m
-  Bind :: RefMonad m r => PushT a m -> (a -> (PushT b m,Length)) -> PushT b m
+  -- Return :: b -> PushT b m
+  -- Bind :: (MonadRef ctxt m r, ctxt Index) => PushT a m -> (a -> (PushT b m,Length)) -> PushT b m
   
   Flatten :: (ForMonad ctxt m, RefMonad m r, ctxt Length) => (Index -> (PushT b m,Length)) -> Length -> PushT b m
 
@@ -202,9 +219,9 @@ apply (Zip p ixf) = \k -> let k' = ZipW k ixf
                               in apply p k' 
 
 
-apply (Return a) = \k -> applyW k 0 a
-apply (Bind p f) = \k -> do r <- newRef 0
-                            apply p (BindW f k r)
+-- apply (Return a) = \k -> applyW k 0 a
+-- apply (Bind p f) = \k -> do r <- newRef_ 0
+--                             apply p (BindW f k r)
 
 apply (Seq p1 p2) = \k -> apply p1 k >> apply p2 k
   
@@ -235,13 +252,13 @@ apply (Stride start step n f) =
          applyW k (start + step*i) (f i) 
 
 
-apply (Force p l) =
-  \k -> do arr <- M.new l
-           apply p (VectorW arr) -- (\i a -> M.write arr i a)
-           imm <- V.freeze arr
-           let (Pull ixf _) = pullFrom imm
-           for_ l $ \ix ->
-             applyW k ix (ixf ix) 
+-- apply (Force p l) =
+--   \k -> do arr <- M.new l
+--            apply p (VectorW arr) -- (\i a -> M.write arr i a)
+--            imm <- V.freeze arr
+--            let (Pull ixf _) = pullFrom imm
+--            for_ l $ \ix ->
+--              applyW k ix (ixf ix) 
 
 
 ---------------------------------------------------------------------------
@@ -332,12 +349,12 @@ scanl f init v = Push (Scanl f init ixf n) n
     (Pull ixf n) = pullFrom v
 
 
-foldPush :: forall m r a . (RefMonad m r) => (a -> a -> a) -> a -> Push m a -> m a
+foldPush :: forall ctxt m r a . (MonadRef ctxt m r, ctxt a) => (a -> a -> a) -> a -> Push m a -> m a
 foldPush f a (Push p m) = 
   do
-    r <- newRef a
+    r <- newRef_ a
     apply p (FoldW r f)
-    readRef r
+    readRef_ r
     
 
 --                   start     step
@@ -359,23 +376,23 @@ zipByPermute p1 p2 =
 
 
 
-instance (PrimMonad m, RefMonad m r) => Monad (Push m) where
-  return a = Push (Return a) 1
-  (Push p l) >>= f = Push p' l'
-    where
-      -- A trick so that the data types don't depend on the type Push
-      g a = let (Push p l) = f a in (p,l)
-      h a = let (Push _ l) = f a in l
-      p' = Bind p g
-      l' = unsafeInlinePrim $
-           do r <- newRef 0
-              apply p (BindLength h r)
-              readRef r
+-- instance (PrimMonad m, RefMonad m r) => Monad (Push m) where
+--   return a = Push (Return a) 1
+--   (Push p l) >>= f = Push p' l'
+--     where
+--       -- A trick so that the data types don't depend on the type Push
+--       g a = let (Push p l) = f a in (p,l)
+--       h a = let (Push _ l) = f a in l
+--       p' = Bind p g
+--       l' = unsafeInlinePrim $
+--            do r <- newRef 0
+--               apply p (BindLength h r)
+--               readRef r
 
-join :: (PrimMonad m, RefMonad m r ) => Push m (Push m a) -> Push m a
-join mm = do
-  m <- mm
-  m
+-- join :: (PrimMonad m, RefMonad m r ) => Push m (Push m a) -> Push m a
+-- join mm = do
+--   m <- mm
+--   m
 
 ---------------------------------------------------------------------------
 -- Conversion Pull Push (Clean this mess up)
@@ -398,21 +415,23 @@ instance (PullFrom c, ForMonad ctxt m, ctxt Length) => ToPush m c where
 -- write to vector
 --------------------------------------------------------------------------- 
 
-freeze :: PrimMonad m => Push m a -> m (V.Vector a)
+freeze :: (ctxt Index, ctxt a, MemMonad ctxt mem m) => Push m a -> m (mem a)
 freeze (Push p l) =
   do
-     arr <- M.new l
+     arr <- allocate l
      apply p (VectorW arr)
-     V.freeze arr
-     
+     return arr
+     -- A.freeze arr
+
+toVector :: (ctxt Index, ctxt a, MemMonad ctxt mem m) => Push m a -> m (mem a)
 toVector = freeze 
 
 ---------------------------------------------------------------------------
 -- A defunctionalisable "freeze", called force. 
 ---------------------------------------------------------------------------
      
-force :: (ForMonad ctxt m, PrimMonad m, ctxt Length) => Push m a -> Push m a
-force (Push p l) = Push (Force p l) l
+--force :: (ForMonad ctxt m, PrimMonad m, ctxt Length) => Push m a -> Push m a
+--force (Push p l) = Push (Force p l) l
   
 ---------------------------------------------------------------------------
 -- Simple program
@@ -420,11 +439,17 @@ force (Push p l) = Push (Force p l) l
 
 input11 = Pull (\i -> i) 16
 
-test11 :: (ForMonad ctxt m, PrimMonad m,ctxt Length) => Pull Int -> Push m Int
-test11 = map (+1) . force . map (+1) . push  
+-- test11 :: (ForMonad ctxt m, PrimMonad m,ctxt Length) => Pull Int -> Push m Int
+-- test11 = map (+1) . force . map (+1) . push  
+
+test11 :: (ForMonad ctxt m,ctxt Length) => Pull Int -> Push m Int
+test11 = map (+1)  . map (+1) . push  
 
 runTest11 = toVector (test11 input11 :: Push IO Int) 
 
+runTest11' = do { s <- runTest11; (getElems s)} 
+
+compileTest11 = toVector (test11 input11 :: Push CompileMonad Int) 
 
 
 ---------------------------------------------------------------------------
@@ -433,14 +458,15 @@ runTest11 = toVector (test11 input11 :: Push IO Int)
 
 type Id = String
 
-type Type = Int -- dummy 
-
+data Type = Int -- dummy 
+            deriving Show 
 data Code = Skip
           | Code :>>: Code
           | For Id Length Code
           | Allocate Id Length Type 
           | Write Id Exp Exp
           | Read Id Exp Id
+            deriving Show 
 
 data CodeT a where
   ReturnRef :: CMRef Exp -> CodeT (CMRef a)
@@ -455,17 +481,20 @@ data Exp = Var Id
          | Exp :+: Exp
          | Exp :-: Exp 
          | Exp :*: Exp 
-
+         deriving Show 
 
 data CMRef a where
   CMRef :: Id -> CMRef a --Exp  
+
+data CMMem a where
+  CMMem :: Id -> Length -> CMMem a 
 
 newtype CompileMonad a = CM (StateT Integer (Writer Code) a)
      deriving (Monad, MonadState Integer, MonadWriter Code)
 
 
 runCM :: Integer -> CompileMonad a -> Code
-runCM = undefined 
+runCM i (CM s) = snd $ runWriter (evalStateT s i)
 
 
 newId :: CompileMonad String 
@@ -474,7 +503,7 @@ newId = do i <- get
            return $ "v" P.++ show i 
 
 typeOf :: a -> Type
-typeOf = undefined 
+typeOf _  = Int -- undefined 
 
 instance MonadRef Expable CompileMonad CMRef where
   newRef_ a = do i <- newId
@@ -491,7 +520,14 @@ instance ForMonad Expable CompileMonad where
    for_ n f = do i <- newId
                  tell $ For i n $ runCM 1 (f (fromExp (Var i)))
                 
-  
+
+instance MemMonad Expable CMMem CompileMonad where
+  allocate n = do
+    i <- newId
+    tell $ Allocate i n Int -- Cheat!
+    return $ CMMem i n
+  write (CMMem id n) i a = tell $ Write id (toExp i) (toExp a)  
+
 
 class Expable a where
   toExp :: a -> Exp
@@ -501,6 +537,10 @@ instance Expable Exp where
   toExp = id
   fromExp = id
 
+instance Expable Int where
+  toExp = Literal
+  fromExp (Literal i)  = i --- 
+  fromExp _ = error "Not a Literal" 
 
 class Monad m => MonadRef ctxt m r | m -> r, m -> ctxt where
   newRef_ :: ctxt a => a -> m (r a)
