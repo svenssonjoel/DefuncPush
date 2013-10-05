@@ -496,6 +496,11 @@ newtype CompileMonad a = CM (StateT Integer (Writer Code) a)
 runCM :: Integer -> CompileMonad a -> Code
 runCM i (CM s) = snd $ runWriter (evalStateT s i)
 
+localCode :: CompileMonad a -> CompileMonad (a,Code)
+localCode (CM m) = do s <- get
+                      let ((a,s'),code) = runWriter (runStateT m s)
+                      put s
+                      return (a,code)
 
 newId :: CompileMonad String 
 newId = do i <- get
@@ -518,8 +523,8 @@ instance MonadRef Expable CompileMonad CMRef where
 
 instance ForMonad Expable CompileMonad where
    for_ n f = do i <- newId
-                 tell $ For i (toExp n) $ runCM 1 (f (fromExp (Var i)))
-                
+                 (_,body) <- localCode (f (fromExp (Var i)))
+                 tell $ For i (toExp n) body
 
 instance MemMonad Expable CMMem CompileMonad where
   allocate n = do
