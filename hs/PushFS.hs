@@ -43,8 +43,6 @@ import GHC.Prim (Constraint)
 --class Monad m => ForMonad ctxt m | m -> ctxt where
 --  for_ :: (Num a, Enum a, ctxt a) => a -> (a -> m ()) -> m () 
 
-
--- is this a hack ?
 class Monad m => ForMonad ctxt m | m -> ctxt where
   for_ :: ctxt a => a -> (a -> m ()) -> m () 
 
@@ -449,7 +447,7 @@ runTest11 = toVector (test11 input11 :: Push IO Int)
 
 runTest11' = do { s <- runTest11; (getElems s)} 
 
-compileTest11 = toVector (test11 input11 :: Push CompileMonad Int) 
+compileTest11 = runCM 0 $ toVector (test11 input11 :: Push CompileMonad Int) 
 
 
 ---------------------------------------------------------------------------
