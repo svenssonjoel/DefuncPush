@@ -470,7 +470,9 @@ data CodeT a where
   ReturnRef :: CMRef Exp -> CodeT (CMRef a)
 
 instance Monoid Code where
-  mempty = Skip 
+  mempty = Skip
+  mappend Skip a = a
+  mappend a Skip = a
   mappend a b = a :>>: b 
 
 data Exp = Var Id
