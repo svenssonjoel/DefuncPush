@@ -11,7 +11,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}  -- for the bind example only
 
 
-module PushFS where
+module PushC where
 
 
 import Control.Monad
@@ -44,7 +44,7 @@ type Index = Exp
 type Length = Int 
 
 
----------------------------------------------------------------------------
+--------------------------------------------------------------------------
 -- contents of pull
 ---------------------------------------------------------------------------
 
@@ -73,25 +73,28 @@ instance PullFrom Pull where
 --class Monad m => ForMonad ctxt m | m -> ctxt where
 --  for_ :: (Num a, Enum a, ctxt a) => a -> (a -> m ()) -> m () 
 
-class Monad m => ForMonad ctxt m | m -> ctxt where
-  for_ :: ctxt a => a -> (a -> m ()) -> m () 
+--class Monad m => ForMonad ctxt m | m -> ctxt where
+--  for_ :: ctxt a => a -> (a -> m ()) -> m () 
+
+class Monad m => ForMonad (ctxt :: * -> Constraint) m | m -> ctxt where
+  for_ :: Index -> (Index -> m ()) -> m () 
 
 
-instance ForMonad Enum IO where
-  for_ n f = forM_ [0..(fromEnum n)-1] (f . toEnum)
+--instance ForMonad Enum IO where
+--   for_ n f = forM_  [0..n-1] (f . toEnum)
 
-instance RefMonad m r => MonadRef ctxt m r where
-  newRef_ = newRef
-  readRef_ = readRef
-  writeRef_ = writeRef
+--instance RefMonad m r => MonadRef ctxt m r where
+--  newRef_ = newRef
+--  readRef_ = readRef
+--  writeRef_ = writeRef
 
 ---------------------------------------------------------------------------
 -- Monad with Memory
 ---------------------------------------------------------------------------
 class Monad m => MemMonad ctxt mem m | m -> mem, m -> ctxt where
   allocate :: Length -> m (mem a)
-  write :: (ctxt Index, ctxt a) => mem a -> Index -> a -> m ()
-  read  :: (ctxt Index, ctxt a) => mem a -> Index -> m a 
+  write :: (ctxt a) => mem a -> Index -> a -> m ()
+  read  :: (ctxt a) => mem a -> Index -> m a 
 
 class Empty a
 instance Empty a
@@ -124,7 +127,7 @@ data Write a m where
   -- Felt awkward when writing this down 
   ZipW  :: Write (a,b) m -> (Index -> b) -> Write a m 
 
-  VectorW :: (ctxt a, ctxt Index,  MemMonad ctxt mem m) => mem a -> Write a m
+  VectorW :: (ctxt a,  MemMonad ctxt mem m) => mem a -> Write a m
 
   AppendW :: Write a m -> Index -> Write a m
   
@@ -178,9 +181,9 @@ data PushT b m  where
   Map  :: PushT a m -> (a -> b) -> PushT b m
   IMap :: PushT a m -> (a -> Index -> b) -> PushT b m
   Append :: Monad m => Index -> PushT b m -> PushT b m -> PushT b m
-  Generate :: (ForMonad ctxt m, ctxt Length, ctxt Index)  => (Index -> b) -> Length -> PushT b m
-  Iterate :: (ForMonad ctxt m, RefMonad m r, ctxt Length, ctxt Index) => (b -> b) -> b -> Length -> PushT b m
-  Unpair :: (ForMonad ctxt m, ctxt Length, ctxt Index) => (Index -> (b,b)) -> Length -> PushT b m
+  Generate :: (ForMonad ctxt m, ctxt Length)  => (Index -> b) -> Length -> PushT b m
+  Iterate :: (ForMonad ctxt m, RefMonad m r, ctxt Length) => (b -> b) -> b -> Length -> PushT b m
+  Unpair :: (ForMonad ctxt m, ctxt Length) => (Index -> (b,b)) -> Length -> PushT b m
   UnpairP :: Monad m => PushT (b,b) m -> PushT b m 
 
   Interleave :: Monad m => PushT a m -> PushT a m -> PushT a m 
@@ -190,18 +193,18 @@ data PushT b m  where
   -- Return :: b -> PushT b m
   -- Bind :: (MonadRef ctxt m r, ctxt Index) => PushT a m -> (a -> (PushT b m,Length)) -> PushT b m
   
---   Flatten :: (ForMonad ctxt m, RefMonad m r, ctxt Length) => (Index -> (PushT b m,Length)) -> Length -> PushT b m
+  --Flatten :: (ForMonad ctxt m, RefMonad m r, ctxt Length,ctxt Index) => (Index -> (PushT b m,Length)) -> Length -> PushT b m
 
   -- Scanl :: (ForMonad ctxt m, RefMonad m r, ctxt Length) => (a -> b -> a) -> a -> (Index -> b) -> Length -> PushT a m 
 
 
-  Force :: (ctxt a, MemMonad ctxt mem m, ForMonad ctxt m, ctxt Length, ctxt Index) => PushT a m -> Length -> PushT a m 
+  Force :: (ctxt a, MemMonad ctxt mem m, ForMonad ctxt m, ctxt Length) => PushT a m -> Length -> PushT a m 
   
   -- Unsafe
 
   IxMap :: PushT b m -> (Index -> Index) -> PushT b m
   Seq :: Monad m => PushT b m -> PushT b m -> PushT b m
-  Scatter :: (ForMonad ctxt m, ctxt Length, ctxt Index) => (Index -> (b,Index)) -> Length -> PushT b m
+  Scatter :: (ForMonad ctxt m, ctxt Length) => (Index -> (b,Index)) -> Length -> PushT b m
   --Stride  :: (ForMonad ctxt m, ctxt Length, ctxt Index) => Index -> Length -> Length -> (Index -> b) -> PushT b m 
 
 ---------------------------------------------------------------------------
@@ -253,14 +256,15 @@ apply (Scatter f n) = \k -> for_ (fromIntegral n) $ \i ->
                               applyW k (snd (f i)) (fst (f i))
 
 -- apply (Flatten ixfp n) =
---   \k ->
---           do
---           r <- newRef 0 
---           for_ (fromIntegral n) $ \i -> do
---             s <- readRef r
---             let (p,m) = ixfp i
---             apply p (AppendW k s) 
---             writeRef r (s + m)
+--    \k ->
+--         do
+--            r <- newRef_ 0 
+--            for_ (fromIntegral n) $ \i -> do
+--              s <- readRef_ r
+--              let (p,m) = ixfp i
+--              apply p (AppendW k s) 
+--              writeRef_ r (s + (fromIntegral m))
+
 
 -- apply (Scanl f init ixf n) = \k ->
 --   do
@@ -322,13 +326,13 @@ ixmap f (Push p l) = Push (IxMap p f) l
 reverse :: Push m a -> Push m a
 reverse p = ixmap (\i -> (fromIntegral (len p - 1)) - i) p
 
-iterate :: (ForMonad ctxt m, RefMonad m r, ctxt Length, ctxt Index) => Length -> (a -> a) -> a -> Push m a
+iterate :: (ForMonad ctxt m, RefMonad m r, ctxt Length) => Length -> (a -> a) -> a -> Push m a
 iterate n f a = Push (Iterate f a n) n 
 
 ---------------------------------------------------------------------------
 -- unpair / interleave 
 --------------------------------------------------------------------------- 
-unpair :: (ForMonad ctxt m, ctxt Length, ctxt Index)  => Pull (a,a) -> Push m a
+unpair :: (ForMonad ctxt m, ctxt Length)  => Pull (a,a) -> Push m a
 unpair (Pull ixf n) =
   Push (Unpair ixf n) (2*n)
 
@@ -345,7 +349,7 @@ interleave (Push p m) (Push q n) =
 ---------------------------------------------------------------------------
 -- Zips
 --------------------------------------------------------------------------- 
-zipPush :: (ForMonad ctxt m, ctxt Length, ctxt Index) => Pull a -> Pull a -> Push m a
+zipPush :: (ForMonad ctxt m, ctxt Length) => Pull a -> Pull a -> Push m a
 zipPush p1 p2 = unpair $  zipPull p1 p2 
 
 zipSpecial :: Monad m => Push m a -> Pull b -> Push m (a,b)
@@ -356,7 +360,7 @@ zipSpecial (Push p n1) (Pull ixf n2) =
 ---------------------------------------------------------------------------
 --
 --------------------------------------------------------------------------- 
-scatter :: (ForMonad ctxt m, ctxt Length, ctxt Index)  => Pull (a,Index) -> Push m a
+scatter :: (ForMonad ctxt m, ctxt Length)  => Pull (a,Index) -> Push m a
 scatter (Pull ixf n) =
   Push (Scatter ixf n) n 
 
@@ -446,7 +450,7 @@ instance (PullFrom c, ForMonad ctxt m, ctxt Length, ctxt Index) => ToPush m c wh
 -- write to vector
 --------------------------------------------------------------------------- 
 
-freeze :: (ctxt Index, ctxt a, MemMonad ctxt mem m) => Push m a -> m (mem a)
+freeze :: (ctxt a, MemMonad ctxt mem m) => Push m a -> m (mem a)
 freeze (Push p l) =
   do
      arr <- allocate l
@@ -461,7 +465,7 @@ toVector = freeze
 -- A defunctionalisable "freeze", called force. 
 ---------------------------------------------------------------------------
      
-force :: (ctxt a, MemMonad ctxt mem m, ForMonad ctxt m, ctxt Length, ctxt Index) => Push m a -> Push m a
+force :: (ctxt a, MemMonad ctxt mem m, ForMonad ctxt m, ctxt Length) => Push m a -> Push m a
 force (Push p l) = Push (Force p l) l
   
 ---------------------------------------------------------------------------
@@ -485,7 +489,8 @@ input11' = Pull (\i -> i) 16
 test11' :: (MemMonad ctxt mem m, ForMonad ctxt m,ctxt Length, ctxt Index) => Pull Exp -> Push m Exp
 test11' = map (+1) . force . map (+1) . push  
 
-compileTest11 = runCM 0 $ toVector (test11' input11' :: Push CompileMonad Exp) 
+compileTest11a = runCM 0 $ foldPush (+) 0 (test11' input11' :: Push CompileMonad Exp)
+compileTest11b = runCM 0 $ toVector (test11' input11' :: Push CompileMonad Exp)
 
 {-
 Allocate "v0" 16 Int :>>:
@@ -502,6 +507,19 @@ Allocate "v0" 16 Int :>>:
  For "v5" (Literal 16) (Read "v3" (Var "v5") "v6" :>>: Write "v2" (Var "v5") (Var "v6")))) :>>:
  For "v6" (Literal 16) (Read "v2" (Var "v6") "v7" :>>: Write "v1" (Var "v6") (Var "v7")))) :>>:
  For "v7" (Literal 16) (Read "v1" (Var "v7") "v8" :>>: Write "v0" (Var "v7") (Var "v8"))))
+
+
+Allocate "v0" 1 Int :>>:
+((Allocate "v1" 16 Int :>>:
+(For "v2" (Literal 16) (Write "v1" (Var "v2") (Var "v2" :+: Literal 1)) :>>:
+ For "v3" (Literal 16)
+          (Read "v1" (Var "v3") "v4" :>>:
+          (Read "v0" (Literal 1) "v5" :>>:
+           Write "v0" (Literal 1)
+                      (Var "v5" :+: (Var "v4" :+: Literal 1)))))) :>>:
+ Read "v0" (Literal 1) "v4")
+
+
 -} 
 ---------------------------------------------------------------------------
 -- Compile 
@@ -574,6 +592,7 @@ typeOf _  = Int -- undefined
 instance MonadRef Expable CompileMonad CMRef where
   newRef_ a = do i <- newId
                  tell $ Allocate i 1 (typeOf a)
+                 tell $ Write i 0 (toExp a)
                  return $ CMRef i 
              
   readRef_ (CMRef i) = do v <- newId 

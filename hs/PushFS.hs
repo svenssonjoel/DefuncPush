@@ -526,6 +526,7 @@ typeOf _  = Int -- undefined
 instance MonadRef Expable CompileMonad CMRef where
   newRef_ a = do i <- newId
                  tell $ Allocate i 1 (typeOf a)
+                 tell $ Write i 0 (toExp a) 
                  return $ CMRef i 
              
   readRef_ (CMRef i) = do v <- newId 
