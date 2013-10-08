@@ -30,7 +30,7 @@ import Data.Array.MArray hiding (freeze)
 import Data.Array.IO hiding (freeze)
 import qualified Data.Array.IO as A 
 
-import Prelude hiding (reverse,scanl,map)
+import Prelude hiding (reverse,scanl,map,read)
 import qualified Prelude as P 
 
 import GHC.Prim (Constraint) 
@@ -90,7 +90,8 @@ instance RefMonad m r => MonadRef ctxt m r where
 ---------------------------------------------------------------------------
 class Monad m => MemMonad ctxt mem m | m -> mem, m -> ctxt where
   allocate :: Length -> m (mem a)
-  write :: (ctxt Index, ctxt a) => mem a -> Index -> a -> m () 
+  write :: (ctxt Index, ctxt a) => mem a -> Index -> a -> m ()
+  read  :: (ctxt Index, ctxt a) => mem a -> Index -> m a 
 
 class Empty a
 instance Empty a
@@ -194,7 +195,7 @@ data PushT b m  where
   -- Scanl :: (ForMonad ctxt m, RefMonad m r, ctxt Length) => (a -> b -> a) -> a -> (Index -> b) -> Length -> PushT a m 
 
 
-  Force :: (ForMonad ctxt m, PrimMonad m, ctxt Length) => PushT a m -> Length -> PushT a m 
+  Force :: (ctxt a, MemMonad ctxt mem m, ForMonad ctxt m, ctxt Length, ctxt Index) => PushT a m -> Length -> PushT a m 
   
   -- Unsafe
 
@@ -273,6 +274,14 @@ apply (Scatter f n) = \k -> for_ (fromIntegral n) $ \i ->
 --   \k -> for_ (fromIntegral n) $ \i ->
 --          applyW k (start + (fromIntegral step)*i) (f i) 
 
+
+apply (Force p l) =
+  \k -> do arr <- allocate l
+           apply p  (VectorW arr)
+           for_ (fromIntegral l) $ \ix ->
+             do a <- read arr ix
+                applyW k ix a 
+        
 
 -- apply (Force p l) =
 --   \k -> do arr <- M.new l
@@ -452,8 +461,8 @@ toVector = freeze
 -- A defunctionalisable "freeze", called force. 
 ---------------------------------------------------------------------------
      
---force :: (ForMonad ctxt m, PrimMonad m, ctxt Length) => Push m a -> Push m a
---force (Push p l) = Push (Force p l) l
+force :: (ctxt a, MemMonad ctxt mem m, ForMonad ctxt m, ctxt Length, ctxt Index) => Push m a -> Push m a
+force (Push p l) = Push (Force p l) l
   
 ---------------------------------------------------------------------------
 -- Simple program
@@ -473,12 +482,27 @@ input11 = Pull (\i -> i) 16
 
 -- Måste nog vara Exps ?? 
 input11' = Pull (\i -> i) 16
-test11' :: (ForMonad ctxt m,ctxt Length, ctxt Index) => Pull Exp -> Push m Exp
-test11' = map (+1)  . map (+1) . push  
+test11' :: (MemMonad ctxt mem m, ForMonad ctxt m,ctxt Length, ctxt Index) => Pull Exp -> Push m Exp
+test11' = map (+1) . force . map (+1) . push  
 
 compileTest11 = runCM 0 $ toVector (test11' input11' :: Push CompileMonad Exp) 
 
+{-
+Allocate "v0" 16 Int :>>:
+(Allocate "v1" 16 Int :>>:
+(For "v2" (Literal 16) (Write "v1" (Var "v2") (Var "v2" :+: Literal 1)) :>>:
+ For "v3" (Literal 16) (Read "v1" (Var "v3") "v4" :>>:
+                        Write "v0" (Var "v3") (Var "v4"))))
 
+Allocate "v0" 16 Int :>>:
+(Allocate "v1" 16 Int :>>:
+((Allocate "v2" 16 Int :>>:
+((Allocate "v3" 16 Int :>>:
+(For "v4" (Literal 16) (Write "v3" (Var "v4") (Var "v4" :+: Literal 1)) :>>:
+ For "v5" (Literal 16) (Read "v3" (Var "v5") "v6" :>>: Write "v2" (Var "v5") (Var "v6")))) :>>:
+ For "v6" (Literal 16) (Read "v2" (Var "v6") "v7" :>>: Write "v1" (Var "v6") (Var "v7")))) :>>:
+ For "v7" (Literal 16) (Read "v1" (Var "v7") "v8" :>>: Write "v0" (Var "v7") (Var "v8"))))
+-} 
 ---------------------------------------------------------------------------
 -- Compile 
 ---------------------------------------------------------------------------
@@ -493,7 +517,7 @@ data Code = Skip
           | Allocate Id Length Type 
           | Write Id Exp Exp
           | Read Id Exp Id
-            deriving Show 
+            deriving Show
 
 data CodeT a where
   ReturnRef :: CMRef Exp -> CodeT (CMRef a)
@@ -569,8 +593,10 @@ instance MemMonad Expable CMMem CompileMonad where
     tell $ Allocate i n Int -- Cheat!
     return $ CMMem i n
   write (CMMem id n) i a = tell $ Write id (toExp i) (toExp a)  
-
-
+  read (CMMem id n) i = do v <- newId
+                           tell $ Read id i v
+                           return $ fromExp (Var v) 
+      
 class Expable a where
   toExp :: a -> Exp
   fromExp :: Exp -> a
