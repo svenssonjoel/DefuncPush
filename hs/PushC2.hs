@@ -70,12 +70,6 @@ instance PullFrom Pull where
 ---------------------------------------------------------------------------
 -- Monad with For
 ---------------------------------------------------------------------------
---class Monad m => ForMonad ctxt m | m -> ctxt where
---  for_ :: (Num a, Enum a, ctxt a) => a -> (a -> m ()) -> m () 
-
---class Monad m => ForMonad ctxt m | m -> ctxt where
---  for_ :: ctxt a => a -> (a -> m ()) -> m () 
-
 class Monad m => ForMonad (ctxt :: * -> Constraint) ix m | m -> ctxt where
   for_ :: ix -> (ix -> m ()) -> m () 
 
@@ -89,17 +83,17 @@ instance RefMonad m r => MonadRef ctxt m r where
   writeRef_ = writeRef
 
 ---------------------------------------------------------------------------
--- Monad with Memory
+-- Monad with Memory 
 ---------------------------------------------------------------------------
-class Monad m => MemMonad ctxt mem ix m | m -> mem, m -> ctxt where
-  allocate :: Length -> m (mem ix a)
-  write :: (ctxt a) => mem ix a -> ix -> a -> m ()
-  read  :: (ctxt a) => mem ix a -> ix -> m a 
+class Monad m => MemMonad ctxt mem ix a m | m -> mem, m -> ctxt where
+  allocate :: ctxt a => Length -> m (mem ix a)
+  write :: ctxt a => mem ix a -> ix -> a -> m ()
+  read  :: ctxt a => mem ix a -> ix -> m a 
 
 class Empty a
 instance Empty a
 
-instance MemMonad Empty IOArray Int IO where
+instance MemMonad Empty IOArray Int a IO where
   allocate n = newArray_ (0,n-1)
   write = writeArray 
   read  = readArray 
@@ -116,7 +110,7 @@ data Push m ix a = Push (PushT ix a m)  Length
 data Write ix a m where
   MapW :: Write ix b m -> (a -> b) -> Write ix a m
   ApplyW :: (ix -> a -> m ()) -> Write ix a m
-  VectorW :: (ctxt a,  MemMonad ctxt mem ix m) => mem ix a -> Write ix a m
+  VectorW :: (ctxt a,  MemMonad ctxt mem ix a m) => mem ix a -> Write ix a m
 
   IMapW :: Write ix b m -> (a -> ix -> b) -> Write ix a m
 
@@ -193,7 +187,7 @@ applyW (FoldW r f) = \i b ->
 data PushT ix b m  where
   Map  :: PushT ix a m -> (a -> b) -> PushT ix b m
   Generate :: (Num ix, ForMonad ctxt ix m)  => (ix -> b) -> Length -> PushT ix b m
-  Force :: (Num ix, ctxt a, MemMonad ctxt mem ix m, ForMonad ctxt ix m) => PushT ix a m -> Length -> PushT ix a m 
+  Force :: (Num ix, ctxt a, MemMonad ctxt mem ix a m, ForMonad ctxt ix m) => PushT ix a m -> Length -> PushT ix a m 
 
 
   IMap :: PushT ix a m -> (a -> ix -> b) -> PushT ix b m
@@ -474,7 +468,7 @@ instance Monad m => ToPush m (Push m) where
 -- write to vector
 --------------------------------------------------------------------------- 
 
-freeze :: (ctxt a, MemMonad ctxt mem ix m) => Push m ix a -> m (mem ix a)
+freeze :: (ctxt a, MemMonad ctxt mem ix a m) => Push m ix a -> m (mem ix a)
 freeze (Push p l) =
   do
      arr <- allocate l 
@@ -482,14 +476,14 @@ freeze (Push p l) =
      return arr
      -- A.freeze arr
 
-toVector :: (ctxt a, MemMonad ctxt mem ix m) => Push m ix a -> m (mem ix a)
+toVector :: (ctxt a, MemMonad ctxt mem ix a m) => Push m ix a -> m (mem ix a)
 toVector = freeze 
 
 ---------------------------------------------------------------------------
 -- A defunctionalisable "freeze", called force. 
 ---------------------------------------------------------------------------
      
-force :: (Num ix, ctxt a, MemMonad ctxt mem ix m, ForMonad ctxt ix m) => Push m ix a -> Push m ix a
+force :: (Num ix, ctxt a, MemMonad ctxt mem ix a m, ForMonad ctxt ix m) => Push m ix a -> Push m ix a
 force (Push p l) = Push (Force p l) l
 {-   
 ---------------------------------------------------------------------------
@@ -499,7 +493,7 @@ force (Push p l) = Push (Force p l) l
 
 input11 = Pull (\i -> i) 16
 test11 :: (Num a, Num ix,
-           ctxt a, MemMonad ctxt mem ix m,
+           ctxt a, MemMonad ctxt mem ix a m,
            ForMonad ctxt ix m)
           => Pull ix a -> Push m ix a
 test11 = map (+1) . force . map (+1) . push  
@@ -599,11 +593,12 @@ instance ForMonad Expable (Expr Int) CompileMonad where
                  (_,body) <- localCode (f (fromExp (Var i)))
                  tell $ For i (toExp n) body
 
-instance MemMonad Expable CMMem (Expr Int) CompileMonad where
+instance MemMonad Expable CMMem (Expr Int) a CompileMonad where
   allocate n = do
     i <- newId
-    tell $ Allocate i n Int -- Cheat!! 
+    tell $ Allocate i n (typeOf (undefined :: a ))
     return $ CMMem i n
+    
   write (CMMem id n) i a = tell $ Write id (toExp i) (toExp a)  
   read (CMMem id n) i = do v <- newId
                            tell $ Read id (toExp i) v
