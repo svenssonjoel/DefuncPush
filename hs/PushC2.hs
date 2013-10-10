@@ -83,10 +83,10 @@ class Monad m => ForMonad (ctxt :: * -> Constraint) ix m | m -> ctxt where
 instance ForMonad Empty Int IO where
    for_ n f = forM_  [0..n-1] (f . toEnum)
 
---instance RefMonad m r => MonadRef ctxt m r where
---  newRef_ = newRef
---  readRef_ = readRef
---  writeRef_ = writeRef
+instance RefMonad m r => MonadRef ctxt m r where
+  newRef_ = newRef
+  readRef_ = readRef
+  writeRef_ = writeRef
 
 ---------------------------------------------------------------------------
 -- Monad with Memory
@@ -117,10 +117,13 @@ data Write ix a m where
   MapW :: Write ix b m -> (a -> b) -> Write ix a m
   ApplyW :: (ix -> a -> m ()) -> Write ix a m
   VectorW :: (ctxt a,  MemMonad ctxt mem ix m) => mem ix a -> Write ix a m
-{- 
-  IMapW :: Write b m -> (a -> Index -> b) -> Write a m
-  IxMapW :: Write a m -> (Index -> Index) -> Write a m 
-  
+
+  IMapW :: Write ix b m -> (a -> ix -> b) -> Write ix a m
+
+  IxMapW :: Write ix a m -> (ix -> ix) -> Write ix a m
+
+  AppendW :: Write ix a m -> ix -> Write ix a m
+{-   
 
   UnpairW :: Monad m => Write a m -> Write (a,a) m 
 
@@ -132,7 +135,7 @@ data Write ix a m where
 
 
 
-  AppendW :: Write a m -> Index -> Write a m
+
   
   -- BindW :: MonadRef ctxt m r =>  (a -> (PushT b m,Length)) -> Write b m -> r Index -> Write a m
 
@@ -144,13 +147,16 @@ data Write ix a m where
 -- Apply Write 
 ---------------------------------------------------------------------------
   
-applyW :: Write ix a m -> (ix -> a -> m ())
+applyW :: Num ix => Write ix a m -> (ix -> a -> m ())
 applyW (MapW k f) =  \i a -> applyW k i (f a)
 applyW (ApplyW k) = k
 applyW (VectorW v) = \i a -> write v i a
-{- 
+
 applyW (IMapW k f) = \i a -> applyW k i (f a i)
-applyW (IxMapW k f) = \i a -> applyW k (f i) a 
+applyW (IxMapW k f) = \i a -> applyW k (f i) a
+
+applyW (AppendW k l) = \i a -> applyW k (l + i) a
+{- 
 
 
 applyW (UnpairW k) = \i (a,b) ->  applyW k (i*2) a >> applyW k (i*2+1) b
@@ -163,7 +169,7 @@ applyW (ZipW k ixf) = \i a -> applyW k i (a, ixf i)
 
 
 
-applyW (AppendW k l) = \i a -> applyW k (l + i) a
+
 
 -- applyW (BindW f k r) = \i a -> do s <- readRef_ r
 --                                   let (q,m) = (f a)
@@ -189,10 +195,11 @@ data PushT ix b m  where
   Generate :: (Num ix, ForMonad ctxt ix m)  => (ix -> b) -> Length -> PushT ix b m
   Force :: (Num ix, ctxt a, MemMonad ctxt mem ix m, ForMonad ctxt ix m) => PushT ix a m -> Length -> PushT ix a m 
 
-{-
-  IMap :: PushT a m -> (a -> Index -> b) -> PushT b m
-  Append :: Monad m => Index -> PushT b m -> PushT b m -> PushT b m
 
+  IMap :: PushT ix a m -> (a -> ix -> b) -> PushT ix b m
+
+  Append :: Monad m => ix -> PushT ix b m -> PushT ix b m -> PushT ix b m
+{-
   Iterate :: (ForMonad ctxt m, RefMonad m r, ctxt Length) => (b -> b) -> b -> Length -> PushT b m
   Unpair :: (ForMonad ctxt m, ctxt Length) => (Index -> (b,b)) -> Length -> PushT b m
   UnpairP :: Monad m => PushT (b,b) m -> PushT b m 
@@ -212,8 +219,9 @@ data PushT ix b m  where
   
   
   -- Unsafe
-
-  IxMap :: PushT b m -> (Index -> Index) -> PushT b m
+-}
+  IxMap :: PushT ix b m -> (ix -> ix) -> PushT ix b m
+  {-
   Seq :: Monad m => PushT b m -> PushT b m -> PushT b m
   Scatter :: (ForMonad ctxt m, ctxt Length) => (Index -> (b,Index)) -> Length -> PushT b m
   --Stride  :: (ForMonad ctxt m, ctxt Length, ctxt Index) => Index -> Length -> Length -> (Index -> b) -> PushT b m 
@@ -226,13 +234,15 @@ apply :: PushT ix b m -> (Write ix b m -> m ())
 apply (Map p f) = \k -> apply p (MapW k f)
 apply (Generate ixf n) = (\k -> for_ (fromIntegral n) $ \i ->
                            applyW k i (ixf i))
-{-
+
 apply (IMap p f) = \k -> apply p (IMapW k f)
+
 apply (IxMap p f) = \k -> apply p (IxMapW k f) 
+
 apply (Append l p1 p2) = \k -> apply p1 k >>
                                apply p2 (AppendW k l)
 
-
+{-
 apply (Iterate f a n) = \k ->
   do
     sum <- newRef a 
@@ -325,17 +335,18 @@ len (Push _ n) = n
 
 map :: (a -> b) -> Push m ix a -> Push m ix b
 map f (Push p l) = Push (Map p f) l
-{- 
-imap :: (a -> Index -> b) -> Push m a -> Push m b
+ 
+imap :: (a -> ix -> b) -> Push m ix a -> Push m ix b
 imap f (Push p l) = Push (IMap p f) l 
 
-ixmap :: (Index -> Index) -> Push m a -> Push m a
+ixmap :: (ix -> ix) -> Push m ix a -> Push m ix a
 ixmap f (Push p l) = Push (IxMap p f) l 
 
-(++) :: Monad m =>  Push m a -> Push m a  -> Push m a
+(++) :: (Num ix, Monad m) =>  Push m ix a -> Push m ix a  -> Push m ix a
 (Push p1 l1) ++ (Push p2 l2) = 
   Push (Append (fromIntegral l1) p1 p2) (l1 + l2) 
 
+{-
 reverse :: Push m a -> Push m a
 reverse p = ixmap (\i -> (fromIntegral (len p - 1)) - i) p
 
