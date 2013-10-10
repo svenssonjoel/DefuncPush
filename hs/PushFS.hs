@@ -557,8 +557,11 @@ instance Expable Exp where
 
 instance Expable Int where
   toExp = Literal
-  fromExp (Literal i)  = i --- 
-  fromExp e = error $ "Not a Literal: " P.++ show e 
+  fromExp (Literal i) = i
+  fromExp (e1 :+: e2) = fromExp e1 + fromExp e2
+  fromExp (e1 :-: e2) = fromExp e1 - fromExp e2
+  fromExp (e1 :*: e2) = fromExp e1 * fromExp e2
+  fromExp (Var _) = error "fromExp: Variable"
 
 class Monad m => MonadRef ctxt m r | m -> r, m -> ctxt where
   newRef_ :: ctxt a => a -> m (r a)
