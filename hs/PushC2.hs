@@ -52,17 +52,17 @@ type Length = Int
 -- Pull array
 ---------------------------------------------------------------------------
 
-data Pull a = Pull (Index -> a) Length
+data Pull ix a = Pull (ix -> a) Length
 
 
-zipPull :: Pull a -> Pull b -> Pull (a,b)
+zipPull :: Pull i a -> Pull i b -> Pull i (a,b)
 zipPull (Pull p1 n1) (Pull p2 n2) = Pull (\i -> (p1 i, p2 i)) (min n1 n2) 
 
 ---------------------------------------------------------------------------
 -- Convert to Pull array
 --------------------------------------------------------------------------- 
 class PullFrom c where
-  pullFrom :: c a -> Pull a
+  pullFrom :: c i a -> Pull i a
 
 instance PullFrom Pull where
   pullFrom = id 
@@ -76,12 +76,12 @@ instance PullFrom Pull where
 --class Monad m => ForMonad ctxt m | m -> ctxt where
 --  for_ :: ctxt a => a -> (a -> m ()) -> m () 
 
-class Monad m => ForMonad (ctxt :: * -> Constraint) m | m -> ctxt where
-  for_ :: Index -> (Index -> m ()) -> m () 
+class Monad m => ForMonad (ctxt :: * -> Constraint) ix m | m -> ctxt where
+  for_ :: ix -> (ix -> m ()) -> m () 
 
 
---instance ForMonad Enum IO where
---   for_ n f = forM_  [0..n-1] (f . toEnum)
+instance ForMonad Empty Int IO where
+   for_ n f = forM_  [0..n-1] (f . toEnum)
 
 --instance RefMonad m r => MonadRef ctxt m r where
 --  newRef_ = newRef
@@ -91,33 +91,36 @@ class Monad m => ForMonad (ctxt :: * -> Constraint) m | m -> ctxt where
 ---------------------------------------------------------------------------
 -- Monad with Memory
 ---------------------------------------------------------------------------
-class Monad m => MemMonad ctxt mem m | m -> mem, m -> ctxt where
-  allocate :: Length -> m (mem a)
-  write :: (ctxt a) => mem a -> Index -> a -> m ()
-  read  :: (ctxt a) => mem a -> Index -> m a 
+class Monad m => MemMonad ctxt mem ix m | m -> mem, m -> ctxt where
+  allocate :: Length -> m (mem ix a)
+  write :: (ctxt a) => mem ix a -> ix -> a -> m ()
+  read  :: (ctxt a) => mem ix a -> ix -> m a 
 
 class Empty a
 instance Empty a
 
---instance MemMonad Empty (IOArray Int) IO where
---  allocate n = newArray_ (0,n-1)
---  write = writeArray 
-
+instance MemMonad Empty IOArray Int IO where
+  allocate n = newArray_ (0,n-1)
+  write = writeArray 
+  read  = readArray 
 
 ---------------------------------------------------------------------------
 -- Push array
 --------------------------------------------------------------------------- 
-data Push m a = Push (PushT a m)  Length 
+data Push m ix a = Push (PushT ix a m)  Length 
 
 
 ---------------------------------------------------------------------------
 -- Write Function language
 ---------------------------------------------------------------------------
-data Write a m where
-  MapW :: Write b m -> (a -> b) -> Write a m
+data Write ix a m where
+  MapW :: Write ix b m -> (a -> b) -> Write ix a m
+  ApplyW :: (ix -> a -> m ()) -> Write ix a m
+  VectorW :: (ctxt a,  MemMonad ctxt mem ix m) => mem ix a -> Write ix a m
+{- 
   IMapW :: Write b m -> (a -> Index -> b) -> Write a m
   IxMapW :: Write a m -> (Index -> Index) -> Write a m 
-  ApplyW :: (Index -> a -> m ()) -> Write a m
+  
 
   UnpairW :: Monad m => Write a m -> Write (a,a) m 
 
@@ -127,7 +130,7 @@ data Write a m where
   -- Felt awkward when writing this down 
   ZipW  :: Write (a,b) m -> (Index -> b) -> Write a m 
 
-  VectorW :: (ctxt a,  MemMonad ctxt mem m) => mem a -> Write a m
+
 
   AppendW :: Write a m -> Index -> Write a m
   
@@ -136,15 +139,19 @@ data Write a m where
   -- BindLength :: MonadRef ctxt m r => (a -> Length) -> r Index -> Write a m
 
   FoldW :: (MonadRef ctxt m r, ctxt a) => r a -> (a -> a -> a) ->  Write a m
+-} 
 ---------------------------------------------------------------------------
 -- Apply Write 
 ---------------------------------------------------------------------------
   
-applyW :: Write a m -> (Index -> a -> m ())
+applyW :: Write ix a m -> (ix -> a -> m ())
 applyW (MapW k f) =  \i a -> applyW k i (f a)
+applyW (ApplyW k) = k
+applyW (VectorW v) = \i a -> write v i a
+{- 
 applyW (IMapW k f) = \i a -> applyW k i (f a i)
 applyW (IxMapW k f) = \i a -> applyW k (f i) a 
-applyW (ApplyW k) = k
+
 
 applyW (UnpairW k) = \i (a,b) ->  applyW k (i*2) a >> applyW k (i*2+1) b
 
@@ -154,7 +161,7 @@ applyW (Odds  k) = \i a -> applyW k (1*2+1) a
 applyW (ZipW k ixf) = \i a -> applyW k i (a, ixf i) 
 
 
-applyW (VectorW v) = \i a -> write v i a
+
 
 applyW (AppendW k l) = \i a -> applyW k (l + i) a
 
@@ -173,15 +180,19 @@ applyW (FoldW r f) = \i b ->
     v <- readRef_ r
     let v' = f v b
     writeRef_ r v'
-
+-} 
 ---------------------------------------------------------------------------
 -- Push Language
 ---------------------------------------------------------------------------
-data PushT b m  where
-  Map  :: PushT a m -> (a -> b) -> PushT b m
+data PushT ix b m  where
+  Map  :: PushT ix a m -> (a -> b) -> PushT ix b m
+  Generate :: (Num ix, ForMonad ctxt ix m)  => (ix -> b) -> Length -> PushT ix b m
+  Force :: (Num ix, ctxt a, MemMonad ctxt mem ix m, ForMonad ctxt ix m) => PushT ix a m -> Length -> PushT ix a m 
+
+{-
   IMap :: PushT a m -> (a -> Index -> b) -> PushT b m
   Append :: Monad m => Index -> PushT b m -> PushT b m -> PushT b m
-  Generate :: (ForMonad ctxt m, ctxt Length)  => (Index -> b) -> Length -> PushT b m
+
   Iterate :: (ForMonad ctxt m, RefMonad m r, ctxt Length) => (b -> b) -> b -> Length -> PushT b m
   Unpair :: (ForMonad ctxt m, ctxt Length) => (Index -> (b,b)) -> Length -> PushT b m
   UnpairP :: Monad m => PushT (b,b) m -> PushT b m 
@@ -195,10 +206,10 @@ data PushT b m  where
   
   --Flatten :: (ForMonad ctxt m, RefMonad m r, ctxt Length,ctxt Index) => (Index -> (PushT b m,Length)) -> Length -> PushT b m
 
-  -- Scanl :: (ForMonad ctxt m, RefMonad m r, ctxt Length) => (a -> b -> a) -> a -> (Index -> b) -> Length -> PushT a m 
+  -- Scanl :: (ForMonad ctxt m, RefMonad m r, ctxt Length) => (a -> b -> a) -> a -> (Index -> b) ->7 Length -> PushT a m 
 
 
-  Force :: (ctxt a, MemMonad ctxt mem m, ForMonad ctxt m, ctxt Length) => PushT a m -> Length -> PushT a m 
+  
   
   -- Unsafe
 
@@ -206,20 +217,22 @@ data PushT b m  where
   Seq :: Monad m => PushT b m -> PushT b m -> PushT b m
   Scatter :: (ForMonad ctxt m, ctxt Length) => (Index -> (b,Index)) -> Length -> PushT b m
   --Stride  :: (ForMonad ctxt m, ctxt Length, ctxt Index) => Index -> Length -> Length -> (Index -> b) -> PushT b m 
-
+-} 
 ---------------------------------------------------------------------------
 -- Apply
 ---------------------------------------------------------------------------
   
-apply :: PushT b m -> (Write b m -> m ())
+apply :: PushT ix b m -> (Write ix b m -> m ())
 apply (Map p f) = \k -> apply p (MapW k f)
+apply (Generate ixf n) = (\k -> for_ (fromIntegral n) $ \i ->
+                           applyW k i (ixf i))
+{-
 apply (IMap p f) = \k -> apply p (IMapW k f)
 apply (IxMap p f) = \k -> apply p (IxMapW k f) 
 apply (Append l p1 p2) = \k -> apply p1 k >>
                                apply p2 (AppendW k l)
 
-apply (Generate ixf n) = (\k -> for_ (fromIntegral n) $ \i ->
-                           applyW k i (ixf i))
+
 apply (Iterate f a n) = \k ->
   do
     sum <- newRef a 
@@ -278,7 +291,7 @@ apply (Scatter f n) = \k -> for_ (fromIntegral n) $ \i ->
 --   \k -> for_ (fromIntegral n) $ \i ->
 --          applyW k (start + (fromIntegral step)*i) (f i) 
 
-
+-}
 apply (Force p l) =
   \k -> do arr <- allocate l
            apply p  (VectorW arr)
@@ -286,7 +299,7 @@ apply (Force p l) =
              do a <- read arr ix
                 applyW k ix a 
         
-
+{-
 -- apply (Force p l) =
 --   \k -> do arr <- M.new l
 --            apply p (VectorW arr) -- (\i a -> M.write arr i a)
@@ -295,24 +308,24 @@ apply (Force p l) =
 --            for_ l $ \ix ->
 --              applyW k ix (ixf ix) 
 
-
+-}
 ---------------------------------------------------------------------------
 -- Basic functions on push arrays
 ---------------------------------------------------------------------------
 
-len :: Push m a -> Length
+len :: Push m ix a -> Length
 len (Push _ n) = n
 
-(<:) :: Push m a -> (Index -> a -> m ()) -> m () 
+(<:) :: Push m ix a -> (ix -> a -> m ()) -> m () 
 (Push p _) <: k = apply p (ApplyW k)
 
 -- (<~:) :: Push m a -> Write a m ~> m () 
 (Push p _) <~: k = apply p k
 
 
-map :: (a -> b) -> Push m a -> Push m b
+map :: (a -> b) -> Push m ix a -> Push m ix b
 map f (Push p l) = Push (Map p f) l
-
+{- 
 imap :: (a -> Index -> b) -> Push m a -> Push m b
 imap f (Push p l) = Push (IMap p f) l 
 
@@ -428,7 +441,7 @@ zipByPermute p1 p2 =
 -- join mm = do
 --   m <- mm
 --   m
-
+-} 
 ---------------------------------------------------------------------------
 -- Conversion Pull Push (Clean this mess up)
 ---------------------------------------------------------------------------
@@ -437,90 +450,54 @@ push (Pull ixf n) =
   Push (Generate ixf n) n  
 
 class ToPush m arr where
-  toPush ::  arr a -> Push m a
+  toPush ::  arr ix a -> Push m ix a
 
 instance Monad m => ToPush m (Push m) where
   toPush = id
 
-instance (PullFrom c, ForMonad ctxt m, ctxt Length, ctxt Index) => ToPush m c where
-  toPush = push . pullFrom
+--instance (PullFrom c, ForMonad ctxt m, ctxt Length, ctxt Index) => ToPush m c where
+--  toPush = push . pullFrom
 
 
 ---------------------------------------------------------------------------
 -- write to vector
 --------------------------------------------------------------------------- 
 
-freeze :: (ctxt a, MemMonad ctxt mem m) => Push m a -> m (mem a)
+freeze :: (ctxt a, MemMonad ctxt mem ix m) => Push m ix a -> m (mem ix a)
 freeze (Push p l) =
   do
-     arr <- allocate l
+     arr <- allocate l 
      apply p (VectorW arr)
      return arr
      -- A.freeze arr
 
-toVector :: (ctxt Index, ctxt a, MemMonad ctxt mem m) => Push m a -> m (mem a)
+toVector :: (ctxt Index, ctxt a, MemMonad ctxt mem ix m) => Push m ix a -> m (mem ix a)
 toVector = freeze 
 
 ---------------------------------------------------------------------------
 -- A defunctionalisable "freeze", called force. 
 ---------------------------------------------------------------------------
      
-force :: (ctxt a, MemMonad ctxt mem m, ForMonad ctxt m, ctxt Length) => Push m a -> Push m a
+force :: (Num ix, ctxt a, MemMonad ctxt mem ix m, ForMonad ctxt ix m) => Push m ix a -> Push m ix a
 force (Push p l) = Push (Force p l) l
-  
+{-   
 ---------------------------------------------------------------------------
 -- Simple program
 ---------------------------------------------------------------------------
+-}
 
 input11 = Pull (\i -> i) 16
+test11 :: (Num a, Num ix,
+           ctxt a, MemMonad ctxt mem ix m,
+           ForMonad ctxt ix m)
+          => Pull ix a -> Push m ix a
+test11 = map (+1) . force . map (+1) . push  
 
--- test11 :: (ForMonad ctxt m, PrimMonad m,ctxt Length) => Pull Int -> Push m Int
--- test11 = map (+1) . force . map (+1) . push  
+compileTest11 = runCM 0 $ toVector (test11 input11 :: Push CompileMonad Exp Exp)
+runTest11 = toVector (test11 input11 :: Push IO Int Int)
 
--- test11 :: (ForMonad ctxt m,ctxt Length) => Pull Int -> Push m Int
--- test11 = map (+1)  . map (+1) . push  
+runTest11' = do { s <- runTest11; (getElems s)} 
 
--- runTest11 = toVector (test11 input11 :: Push IO Int) 
-
--- runTest11' = do { s <- runTest11; (getElems s)} 
-
--- Måste nog vara Exps ?? 
-input11' = Pull (\i -> i) 16
-test11' :: (MemMonad ctxt mem m, ForMonad ctxt m,ctxt Length, ctxt Index) => Pull Exp -> Push m Exp
-test11' = map (+1) . force . map (+1) . push  
-
-compileTest11a = runCM 0 $ foldPush (+) 0 (test11' input11' :: Push CompileMonad Exp)
-compileTest11b = runCM 0 $ toVector (test11' input11' :: Push CompileMonad Exp)
-
-{-
-Allocate "v0" 16 Int :>>:
-(Allocate "v1" 16 Int :>>:
-(For "v2" (Literal 16) (Write "v1" (Var "v2") (Var "v2" :+: Literal 1)) :>>:
- For "v3" (Literal 16) (Read "v1" (Var "v3") "v4" :>>:
-                        Write "v0" (Var "v3") (Var "v4"))))
-
-Allocate "v0" 16 Int :>>:
-(Allocate "v1" 16 Int :>>:
-((Allocate "v2" 16 Int :>>:
-((Allocate "v3" 16 Int :>>:
-(For "v4" (Literal 16) (Write "v3" (Var "v4") (Var "v4" :+: Literal 1)) :>>:
- For "v5" (Literal 16) (Read "v3" (Var "v5") "v6" :>>: Write "v2" (Var "v5") (Var "v6")))) :>>:
- For "v6" (Literal 16) (Read "v2" (Var "v6") "v7" :>>: Write "v1" (Var "v6") (Var "v7")))) :>>:
- For "v7" (Literal 16) (Read "v1" (Var "v7") "v8" :>>: Write "v0" (Var "v7") (Var "v8"))))
-
-
-Allocate "v0" 1 Int :>>:
-((Allocate "v1" 16 Int :>>:
-(For "v2" (Literal 16) (Write "v1" (Var "v2") (Var "v2" :+: Literal 1)) :>>:
- For "v3" (Literal 16)
-          (Read "v1" (Var "v3") "v4" :>>:
-          (Read "v0" (Literal 1) "v5" :>>:
-           Write "v0" (Literal 1)
-                      (Var "v5" :+: (Var "v4" :+: Literal 1)))))) :>>:
- Read "v0" (Literal 1) "v4")
-
-
--} 
 ---------------------------------------------------------------------------
 -- Compile 
 ---------------------------------------------------------------------------
@@ -565,8 +542,8 @@ instance Num Exp where
 data CMRef a where
   CMRef :: Id -> CMRef a --Exp  
 
-data CMMem a where
-  CMMem :: Id -> Length -> CMMem a 
+data CMMem ix a where
+  CMMem :: Id -> Length -> CMMem ix a 
 
 newtype CompileMonad a = CM (StateT Integer (Writer Code) a)
      deriving (Monad, MonadState Integer, MonadWriter Code)
@@ -601,17 +578,17 @@ instance MonadRef Expable CompileMonad CMRef where
   writeRef_ (CMRef i) e = tell $ Write i (Literal 1) (toExp e)
   
 
-instance ForMonad Expable CompileMonad where
+instance ForMonad Expable Exp CompileMonad where
    for_ n f = do i <- newId
                  (_,body) <- localCode (f (fromExp (Var i)))
                  tell $ For i (toExp n) body
 
-instance MemMonad Expable CMMem CompileMonad where
+instance MemMonad Expable CMMem Exp CompileMonad where
   allocate n = do
     i <- newId
     tell $ Allocate i n Int -- Cheat!
     return $ CMMem i n
-  write (CMMem id n) i a = tell $ Write id (toExp i) (toExp a)  
+  write (CMMem id n) i a = tell $ Write id i (toExp a)  
   read (CMMem id n) i = do v <- newId
                            tell $ Read id i v
                            return $ fromExp (Var v) 
