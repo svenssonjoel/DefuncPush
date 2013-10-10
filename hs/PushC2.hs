@@ -482,7 +482,7 @@ freeze (Push p l) =
      return arr
      -- A.freeze arr
 
-toVector :: (ctxt Index, ctxt a, MemMonad ctxt mem ix m) => Push m ix a -> m (mem ix a)
+toVector :: (ctxt a, MemMonad ctxt mem ix m) => Push m ix a -> m (mem ix a)
 toVector = freeze 
 
 ---------------------------------------------------------------------------
@@ -504,7 +504,7 @@ test11 :: (Num a, Num ix,
           => Pull ix a -> Push m ix a
 test11 = map (+1) . force . map (+1) . push  
 
-compileTest11 = runCM 0 $ toVector (test11 input11 :: Push CompileMonad Exp Exp)
+compileTest11 = runCM 0 $ toVector (test11 input11 :: Push CompileMonad (Expr Int) (Expr Int))
 runTest11 = toVector (test11 input11 :: Push IO Int Int)
 
 runTest11' = do { s <- runTest11; (getElems s)} 
@@ -515,8 +515,10 @@ runTest11' = do { s <- runTest11; (getElems s)}
 
 type Id = String
 
-data Type = Int -- dummy 
-            deriving Show 
+data Type = Int 
+          | Float 
+            deriving Show
+                     
 data Code = Skip
           | Code :>>: Code
           | For Id Exp Code
@@ -524,9 +526,6 @@ data Code = Skip
           | Write Id Exp Exp
           | Read Id Exp Id
             deriving Show
-
-data CodeT a where
-  ReturnRef :: CMRef Exp -> CodeT (CMRef a)
 
 instance Monoid Code where
   mempty = Skip
@@ -538,17 +537,26 @@ data Exp = Var Id
          | Literal Int
          | Index Id Exp
          | Exp :+: Exp
-         | Exp :-: Exp 
-         | Exp :*: Exp 
-         deriving Show 
+         | Exp :-: Exp
+         | Exp :*: Exp
+         deriving Show
 
-instance Num Exp where
-  (+) = (:+:)
-  (-) = (:-:)
-  (*) = (:*:)
+-- Phantomtypes. 
+data Expr a = E {unE :: Exp}
+
+
+inj  :: Exp -> Expr a
+inj e = E e 
+inj2 :: (Exp -> Exp -> Exp) -> (Expr a -> Expr b -> Expr c)
+inj2 f e1 e2  = inj $ f (unE e1) (unE e2)
+
+instance Num a => Num (Expr a)  where
+  (+) = inj2 (:+:)
+  (-) = inj2 (:-:)
+  (*) = inj2 (:*:)
   abs = error "abs: Not implemented"
   signum = error "Signum: Not implemented" 
-  fromInteger = Literal . fromInteger
+  fromInteger = inj . Literal . fromInteger
 
 data CMRef a where
   CMRef :: Id -> CMRef a --Exp  
@@ -574,48 +582,48 @@ newId = do i <- get
            put (i + 1)
            return $ "v" P.++ show i 
 
-typeOf :: a -> Type
-typeOf _  = Int -- undefined 
-
 instance MonadRef Expable CompileMonad CMRef where
   newRef_ a = do i <- newId
                  tell $ Allocate i 1 (typeOf a)
-                 tell $ Write i 0 (toExp a)
+                 tell $ Write i (unE 0) (toExp a)
                  return $ CMRef i 
              
   readRef_ (CMRef i) = do v <- newId 
-                          tell $ Read i (Literal 1) v
+                          tell $ Read i (unE 1) v
                           return $ fromExp (Var v)
-  writeRef_ (CMRef i) e = tell $ Write i (Literal 1) (toExp e)
+  writeRef_ (CMRef i) e = tell $ Write i (unE 1) (toExp e)
   
 
-instance ForMonad Expable Exp CompileMonad where
+instance ForMonad Expable (Expr Int) CompileMonad where
    for_ n f = do i <- newId
                  (_,body) <- localCode (f (fromExp (Var i)))
                  tell $ For i (toExp n) body
 
-instance MemMonad Expable CMMem Exp CompileMonad where
+instance MemMonad Expable CMMem (Expr Int) CompileMonad where
   allocate n = do
     i <- newId
-    tell $ Allocate i n Int -- Cheat!
+    tell $ Allocate i n Int -- Cheat!! 
     return $ CMMem i n
-  write (CMMem id n) i a = tell $ Write id i (toExp a)  
+  write (CMMem id n) i a = tell $ Write id (toExp i) (toExp a)  
   read (CMMem id n) i = do v <- newId
-                           tell $ Read id i v
+                           tell $ Read id (toExp i) v
                            return $ fromExp (Var v) 
       
 class Expable a where
   toExp :: a -> Exp
   fromExp :: Exp -> a
+  typeOf :: a -> Type 
 
-instance Expable Exp where
-  toExp = id
-  fromExp = id
+instance Expable (Expr Int) where
+  toExp = unE 
+  fromExp = inj 
+  typeOf _ = Int
 
-instance Expable Int where
-  toExp = Literal
-  fromExp (Literal i)  = i --- 
-  fromExp e = error $ "Not a Literal: " P.++ show e 
+instance Expable (Expr Float) where
+  toExp = unE 
+  fromExp = inj 
+  typeOf _ = Float
+
 
 class Monad m => MonadRef ctxt m r | m -> r, m -> ctxt where
   newRef_ :: ctxt a => a -> m (r a)
