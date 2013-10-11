@@ -11,7 +11,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}  -- for the bind example only
 
 
-module PushC where
+module PushC2 where
 
 
 import Control.Monad
@@ -88,7 +88,7 @@ instance RefMonad m r => MonadRef ctxt m r where
 class Monad m => MemMonad ctxt mem ix a m | m -> mem, m -> ctxt where
   allocate :: ctxt a => Length -> m (mem ix a)
   write :: ctxt a => mem ix a -> ix -> a -> m ()
-  read  :: ctxt a => mem ix a -> ix -> m a 
+  read  :: ctxt a => mem ix a -> ix -> m a
 
 class Empty a
 instance Empty a
@@ -96,7 +96,8 @@ instance Empty a
 instance MemMonad Empty IOArray Int a IO where
   allocate n = newArray_ (0,n-1)
   write = writeArray 
-  read  = readArray 
+  read  = readArray
+ 
 
 ---------------------------------------------------------------------------
 -- Push array
@@ -189,13 +190,13 @@ data PushT ix b m  where
   Map  :: PushT ix a m -> (a -> b) -> PushT ix b m
 
   -- array creation 
-  Generate :: (Num ix, ForMonad ctxt ix m)  => (ix -> b) -> Length -> PushT ix b m
+  Generate :: (Num ix, ForMonad ctxt ix m)
+              => (ix -> b) -> Length -> PushT ix b m
   Use :: (Num ix, ctxt b, ForMonad ctxt ix m , MemMonad ctxt mem ix b m) =>
          mem ix b -> Length -> PushT ix b m 
 
-
-  
-  Force :: (Num ix, ctxt a, MemMonad ctxt mem ix a m, ForMonad ctxt ix m) => PushT ix a m -> Length -> PushT ix a m 
+  Force :: (Num ix, ctxt b, MemMonad ctxt mem ix b m, ForMonad ctxt ix m)
+           => PushT ix b m -> Length -> PushT ix b m 
 
   IxMap :: PushT ix b m -> (ix -> ix) -> PushT ix b m
   IMap :: PushT ix a m -> (a -> ix -> b) -> PushT ix b m
@@ -528,14 +529,6 @@ runTest11 = toVector (test11 input11 :: Push IO Int Int)
 
 runTest11' = do { s <- runTest11; (getElems s)}
 
-
--- Testing use.
-
---input :: (ctxt ix, Num ix, ForMonad ctxt ix m, MemMonad ctxt mem ix ix m) => m (mem ix ix) 
---input = do arr <- allocate 10
---           for_ (fromIntegral 10) $ \ix ->
---             write arr ix ix
---           return arr
 
 usePrg :: (Num a, Num ix, ctxt a, MemMonad ctxt mem ix a m, ForMonad ctxt ix m)
           => mem ix a -> Push m ix a 
