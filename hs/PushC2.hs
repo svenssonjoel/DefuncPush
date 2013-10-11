@@ -117,6 +117,7 @@ data Write ix a m where
   IxMapW :: Write ix a m -> (ix -> ix) -> Write ix a m
 
   AppendW :: Write ix a m -> ix -> Write ix a m
+
 {-   
 
   UnpairW :: Monad m => Write a m -> Write (a,a) m 
@@ -186,10 +187,17 @@ applyW (FoldW r f) = \i b ->
 ---------------------------------------------------------------------------
 data PushT ix b m  where
   Map  :: PushT ix a m -> (a -> b) -> PushT ix b m
+
+  -- array creation 
   Generate :: (Num ix, ForMonad ctxt ix m)  => (ix -> b) -> Length -> PushT ix b m
+  Use :: (Num ix, ctxt b, ForMonad ctxt ix m , MemMonad ctxt mem ix b m) =>
+         mem ix b -> Length -> PushT ix b m 
+
+
+  
   Force :: (Num ix, ctxt a, MemMonad ctxt mem ix a m, ForMonad ctxt ix m) => PushT ix a m -> Length -> PushT ix a m 
 
-
+  IxMap :: PushT ix b m -> (ix -> ix) -> PushT ix b m
   IMap :: PushT ix a m -> (a -> ix -> b) -> PushT ix b m
 
   Append :: Monad m => ix -> PushT ix b m -> PushT ix b m -> PushT ix b m
@@ -214,7 +222,7 @@ data PushT ix b m  where
   
   -- Unsafe
 -}
-  IxMap :: PushT ix b m -> (ix -> ix) -> PushT ix b m
+  
   {-
   Seq :: Monad m => PushT b m -> PushT b m -> PushT b m
   Scatter :: (ForMonad ctxt m, ctxt Length) => (Index -> (b,Index)) -> Length -> PushT b m
@@ -226,8 +234,13 @@ data PushT ix b m  where
   
 apply :: PushT ix b m -> (Write ix b m -> m ())
 apply (Map p f) = \k -> apply p (MapW k f)
-apply (Generate ixf n) = (\k -> for_ (fromIntegral n) $ \i ->
-                           applyW k i (ixf i))
+apply (Generate ixf n) = \k -> for_ (fromIntegral n) $ \i ->
+                           applyW k i (ixf i)
+
+apply (Use mem l) = \k -> for_ (fromIntegral l) $ \i ->
+                            do a <- read mem i
+                               applyW k i a 
+
 
 apply (IMap p f) = \k -> apply p (IMapW k f)
 
@@ -325,6 +338,18 @@ len (Push _ n) = n
 
 -- (<~:) :: Push m a -> Write a m ~> m () 
 (Push p _) <~: k = apply p k
+
+use :: (Num ix, ctxt a, ForMonad ctxt ix m, MemMonad ctxt mem ix a m)
+       => mem ix a -> Length -> Push m ix a
+use mem l = Push (Use mem l) l
+
+-- undefunctionalised 
+--  where
+--    p k =
+--      for_ (fromIntegral l) $ \ix ->
+--      do
+--        a <- read mem ix
+--        k ix a 
 
 
 map :: (a -> b) -> Push m ix a -> Push m ix b
@@ -501,7 +526,23 @@ test11 = map (+1) . force . map (+1) . push
 compileTest11 = runCM 0 $ toVector (test11 input11 :: Push CompileMonad (Expr Int) (Expr Int))
 runTest11 = toVector (test11 input11 :: Push IO Int Int)
 
-runTest11' = do { s <- runTest11; (getElems s)} 
+runTest11' = do { s <- runTest11; (getElems s)}
+
+
+-- Testing use.
+
+--input :: (ctxt ix, Num ix, ForMonad ctxt ix m, MemMonad ctxt mem ix ix m) => m (mem ix ix) 
+--input = do arr <- allocate 10
+--           for_ (fromIntegral 10) $ \ix ->
+--             write arr ix ix
+--           return arr
+
+usePrg :: (Num a, Num ix, ctxt a, MemMonad ctxt mem ix a m, ForMonad ctxt ix m)
+          => mem ix a -> Push m ix a 
+usePrg input = map (+1) (use input 10 )
+
+compileUsePrg = runCM 0 $ toVector ((usePrg  (CMMem "input1" 10)) :: Push CompileMonad (Expr Int) (Expr Int))
+
 
 ---------------------------------------------------------------------------
 -- Compile 
@@ -527,8 +568,12 @@ instance Monoid Code where
   mappend a Skip = a
   mappend a b = a :>>: b 
 
+data Value = IntVal Int
+           | FloatVal Float
+             deriving Show
+
 data Exp = Var Id
-         | Literal Int
+         | Literal Value
          | Index Id Exp
          | Exp :+: Exp
          | Exp :-: Exp
@@ -544,13 +589,22 @@ inj e = E e
 inj2 :: (Exp -> Exp -> Exp) -> (Expr a -> Expr b -> Expr c)
 inj2 f e1 e2  = inj $ f (unE e1) (unE e2)
 
-instance Num a => Num (Expr a)  where
+instance Num a => Num (Expr Int)  where
   (+) = inj2 (:+:)
   (-) = inj2 (:-:)
   (*) = inj2 (:*:)
   abs = error "abs: Not implemented"
   signum = error "Signum: Not implemented" 
-  fromInteger = inj . Literal . fromInteger
+  fromInteger = inj . Literal . IntVal . fromInteger
+
+instance Num a => Num (Expr Float)  where
+  (+) = inj2 (:+:)
+  (-) = inj2 (:-:)
+  (*) = inj2 (:*:)
+  abs = error "abs: Not implemented"
+  signum = error "Signum: Not implemented" 
+  fromInteger = inj . Literal . FloatVal . fromInteger
+
 
 data CMRef a where
   CMRef :: Id -> CMRef a --Exp  
@@ -579,13 +633,13 @@ newId = do i <- get
 instance MonadRef Expable CompileMonad CMRef where
   newRef_ a = do i <- newId
                  tell $ Allocate i 1 (typeOf a)
-                 tell $ Write i (unE 0) (toExp a)
+                 tell $ Write i (unE (0 :: Expr Int) ) (toExp a)
                  return $ CMRef i 
              
   readRef_ (CMRef i) = do v <- newId 
-                          tell $ Read i (unE 1) v
+                          tell $ Read i (unE (1 :: Expr Int)) v
                           return $ fromExp (Var v)
-  writeRef_ (CMRef i) e = tell $ Write i (unE 1) (toExp e)
+  writeRef_ (CMRef i) e = tell $ Write i (unE (1 :: Expr Int)) (toExp e)
   
 
 instance ForMonad Expable (Expr Int) CompileMonad where
