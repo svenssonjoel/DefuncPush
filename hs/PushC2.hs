@@ -59,13 +59,15 @@ instance PullFrom Pull where
 -- Monad with For
 ---------------------------------------------------------------------------
 class Monad m => ForMonad (ctxt :: * -> Constraint) ix m | m -> ctxt where
-  for_ :: ix -> (ix -> m ()) -> m () 
+  for_ :: ix -> (ix -> m ()) -> m ()
+  par_ :: ix -> (ix -> m ()) -> m () 
 
 
 instance ForMonad Empty Int IO where
    for_ n f = forM_  [0..n-1] (f . toEnum)
+   par_ = for_ 
 
-instance RefMonad m r => MonadRef ctxt m r where
+instance RefMonad IO r => MonadRef Empty IO r where
   newRef_ = newRef
   readRef_ = readRef
   writeRef_ = writeRef
@@ -188,10 +190,12 @@ data PushT ix b m  where
 
   IxMap :: PushT ix b m -> (ix -> ix) -> PushT ix b m
   IMap :: PushT ix a m -> (a -> ix -> b) -> PushT ix b m
+  Iterate :: (Num ix, ForMonad ctxt ix m, MonadRef ctxt m r, ctxt Length,ctxt b)
+             => (b -> b) -> b -> Length -> PushT ix b  m
 
   Append :: Monad m => ix -> PushT ix b m -> PushT ix b m -> PushT ix b m
 {-
-  Iterate :: (ForMonad ctxt m, RefMonad m r, ctxt Length) => (b -> b) -> b -> Length -> PushT b m
+  
   Unpair :: (ForMonad ctxt m, ctxt Length) => (Index -> (b,b)) -> Length -> PushT b m
   UnpairP :: Monad m => PushT (b,b) m -> PushT b m 
 
@@ -223,10 +227,10 @@ data PushT ix b m  where
   
 apply :: PushT ix b m -> (Write ix b m -> m ())
 apply (Map p f) = \k -> apply p (MapW k f)
-apply (Generate ixf n) = \k -> for_ (fromIntegral n) $ \i ->
+apply (Generate ixf n) = \k -> Par_ (fromIntegral n) $ \i ->
                            applyW k i (ixf i)
 
-apply (Use mem l) = \k -> for_ (fromIntegral l) $ \i ->
+apply (Use mem l) = \k -> Par_ (fromIntegral l) $ \i ->
                             do a <- read mem i
                                applyW k i a 
 
@@ -238,16 +242,17 @@ apply (IxMap p f) = \k -> apply p (IxMapW k f)
 apply (Append l p1 p2) = \k -> apply p1 k >>
                                apply p2 (AppendW k l)
 
-{-
+
 apply (Iterate f a n) = \k ->
   do
-    sum <- newRef a 
+    sum <- newRef_ a 
     for_ (fromIntegral n) $ \i ->
       do
-        val <- readRef sum
+        val <- readRef_ sum
         applyW k i val 
-        writeRef sum (f val) 
-        
+        writeRef_ sum (f val) 
+
+{-
 apply (Unpair f n) = \k -> for_ (fromIntegral n) $ \i ->
                              applyW k (i*2) (fst (f i)) >>
                              applyW k (i*2+1) (snd (f i))
@@ -301,7 +306,7 @@ apply (Scatter f n) = \k -> for_ (fromIntegral n) $ \i ->
 apply (Force p l) =
   \k -> do arr <- allocate l
            apply p  (VectorW arr)
-           for_ (fromIntegral l) $ \ix ->
+           par_ (fromIntegral l) $ \ix ->
              do a <- read arr ix
                 applyW k ix a 
         
@@ -354,13 +359,14 @@ ixmap f (Push p l) = Push (IxMap p f) l
 (Push p1 l1) ++ (Push p2 l2) = 
   Push (Append (fromIntegral l1) p1 p2) (l1 + l2) 
 
-{-
-reverse :: Push m a -> Push m a
+
+reverse :: Num ix => Push m ix a -> Push m ix a
 reverse p = ixmap (\i -> (fromIntegral (len p - 1)) - i) p
 
-iterate :: (ForMonad ctxt m, RefMonad m r, ctxt Length) => Length -> (a -> a) -> a -> Push m a
+iterate :: (Num ix, ForMonad ctxt ix m, MonadRef ctxt m r, ctxt Length, ctxt a)
+           => Length -> (a -> a) -> a -> Push m ix a
 iterate n f a = Push (Iterate f a n) n 
-
+{- 
 ---------------------------------------------------------------------------
 -- unpair / interleave 
 --------------------------------------------------------------------------- 
@@ -497,7 +503,8 @@ toVector = freeze
 -- A defunctionalisable "freeze", called force. 
 ---------------------------------------------------------------------------
      
-force :: (Num ix, ctxt a, MemMonad ctxt mem ix a m, ForMonad ctxt ix m) => Push m ix a -> Push m ix a
+force :: (Num ix, ctxt a, MemMonad ctxt mem ix a m, ForMonad ctxt ix m)
+         => Push m ix a -> Push m ix a
 force (Push p l) = Push (Force p l) l
 {-   
 ---------------------------------------------------------------------------
@@ -538,6 +545,7 @@ data Type = Int
 data Code = Skip
           | Code :>>: Code
           | For Id Exp Code
+          | Par Id Exp Code -- parallel for loop
           | Allocate Id Length Type 
           | Write Id Exp Exp
           | Read Id Exp Id
@@ -631,6 +639,10 @@ instance ForMonad Expable (Expr Int) CompileMonad where
    for_ n f = do i <- newId
                  (_,body) <- localCode (f (fromExp (Var i)))
                  tell $ For i (toExp n) body
+   par_ n f = do i <- newId
+                 (_,body) <- localCode (f (fromExp (Var i)))
+                 tell $ Par i (toExp n) body
+
 
 instance MemMonad Expable CMMem (Expr Int) a CompileMonad where
   allocate n = do
