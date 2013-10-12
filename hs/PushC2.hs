@@ -7,8 +7,8 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE KindSignatures #-} 
+{-# LANGUAGE ScopedTypeVariables #-}
 
-{-# LANGUAGE ScopedTypeVariables #-}  -- for the bind example only
 
 
 module PushC2 where
@@ -16,14 +16,10 @@ module PushC2 where
 
 import Control.Monad
 import Control.Monad.ST
-import Control.Monad.Primitive
 
 import Control.Monad.Writer
 import Control.Monad.State 
 import Data.RefMonad
-
---import qualified Data.Vector as V
---import qualified Data.Vector.Mutable as M 
 
 -- replaces the above
 import Data.Array.MArray hiding (freeze)
@@ -39,21 +35,13 @@ import GHC.Prim (Constraint)
 -- Some basics
 ---------------------------------------------------------------------------
 
-
-type Index = Exp
 type Length = Int 
-
-
---------------------------------------------------------------------------
--- contents of pull
----------------------------------------------------------------------------
 
 ---------------------------------------------------------------------------
 -- Pull array
 ---------------------------------------------------------------------------
 
 data Pull ix a = Pull (ix -> a) Length
-
 
 zipPull :: Pull i a -> Pull i b -> Pull i (a,b)
 zipPull (Pull p1 n1) (Pull p2 n2) = Pull (\i -> (p1 i, p2 i)) (min n1 n2) 
@@ -578,7 +566,11 @@ data Expr a = E {unE :: Exp}
 
 
 inj  :: Exp -> Expr a
-inj e = E e 
+inj e = E e
+
+inj1 :: (Exp -> Exp) -> (Expr a -> Expr b)
+inj1 f e = inj $ f (unE e)
+
 inj2 :: (Exp -> Exp -> Exp) -> (Expr a -> Expr b -> Expr c)
 inj2 f e1 e2  = inj $ f (unE e1) (unE e2)
 
