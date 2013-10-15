@@ -227,10 +227,10 @@ data PushT ix b m  where
   
 apply :: PushT ix b m -> (Write ix b m -> m ())
 apply (Map p f) = \k -> apply p (MapW k f)
-apply (Generate ixf n) = \k -> Par_ (fromIntegral n) $ \i ->
+apply (Generate ixf n) = \k -> par_ (fromIntegral n) $ \i ->
                            applyW k i (ixf i)
 
-apply (Use mem l) = \k -> Par_ (fromIntegral l) $ \i ->
+apply (Use mem l) = \k -> par_ (fromIntegral l) $ \i ->
                             do a <- read mem i
                                applyW k i a 
 
