@@ -90,12 +90,6 @@ instance MemMonad Empty IOArray Int a IO where
  
 
 ---------------------------------------------------------------------------
--- Push array
---------------------------------------------------------------------------- 
-data Push m ix a = Push (PushT m ix a)  Length 
-
-
----------------------------------------------------------------------------
 -- Write Function language
 ---------------------------------------------------------------------------
 data Write m ix a where
@@ -338,26 +332,12 @@ apply (Force p l) =
 -- Basic functions on push arrays
 ---------------------------------------------------------------------------
 
---len :: Push m ix a -> Length
---len (Push _ n) = n
-
---(<:) :: Push m ix a -> (ix -> a -> m ()) -> m () 
---(Push p _) <: k = apply p (ApplyW k)
-
 (<:) :: PushT m ix a -> (ix -> a -> m ()) -> m () 
 p <: k = apply p (ApplyW k)
 
--- (<~:) :: Push m a -> Write a m ~> m () 
---(Push p _) <~: k = apply p k
-
---use :: (Num ix, ctxt a, ForMonad ctxt ix m, MemMonad ctxt mem ix a m)
---       => mem ix a -> Length -> Push m ix a
---use mem l = Push (Use mem l) l
 use :: (Num ix, ctxt a, ForMonad ctxt ix m, MemMonad ctxt mem ix a m)
        => mem ix a -> Length -> PushT m ix a
 use mem l = Use mem l
-
-
 -- undefunctionalised 
 --  where
 --    p k =
@@ -366,41 +346,21 @@ use mem l = Use mem l
 --        a <- read mem ix
 --        k ix a 
 
-
---map :: (a -> b) -> Push m ix a -> Push m ix b
---map f (Push p l) = Push (Map p f) l
-
 map :: (a -> b) -> PushT m ix a -> PushT m ix b
 map f p= Map p f
 
---imap :: (a -> ix -> b) -> Push m ix a -> Push m ix b
---imap f (Push p l) = Push (IMap p f) l 
 imap :: (a -> ix -> b) -> PushT m ix a -> PushT m ix b
 imap f p = IMap p f
 
-
---ixmap :: (ix -> ix) -> Push m ix a -> Push m ix a
---ixmap f (Push p l) = Push (IxMap p f) l 
 ixmap :: (ix -> ix) -> PushT m ix a -> PushT m ix a
 ixmap f p = IxMap p f
-
-
---(++) :: (Num ix, Monad m) =>  Push m ix a -> Push m ix a  -> Push m ix a
---(Push p1 l1) ++ (Push p2 l2) = 
---  Push (Append (fromIntegral l1) p1 p2) (l1 + l2) 
 
 (++) :: (Num ix, Monad m) =>  PushT m ix a -> PushT m ix a  -> PushT m ix a
 p1 ++ p2 = Append (fromIntegral $ len p1) p1 p2  
 
---reverse :: Num ix => Push m ix a -> Push m ix a
---reverse p = ixmap (\i -> (fromIntegral (len p - 1)) - i) p
-
 reverse :: Num ix => PushT m ix a -> PushT m ix a
 reverse p = ixmap (\i -> (fromIntegral (len p - 1)) - i) p
 
---iterate :: (Num ix, ForMonad ctxt ix m, MonadRef ctxt m r, ctxt Length, ctxt a)
---           => Length -> (a -> a) -> a -> Push m ix a
---iterate n f a = Push (Iterate f a n) n
 iterate :: (Num ix, ForMonad ctxt ix m, MonadRef ctxt m r, ctxt Length, ctxt a)
            => Length -> (a -> a) -> a -> PushT m ix a
 iterate n f a = Iterate f a n
@@ -532,7 +492,6 @@ freeze p =
      arr <- allocate (len p) 
      apply p (VectorW arr)
      return arr
-     -- A.freeze arr
 
 toVector :: (ctxt a, MemMonad ctxt mem ix a m) => PushT m ix a -> m (mem ix a)
 toVector = freeze 
@@ -544,11 +503,11 @@ toVector = freeze
 force :: (Num ix, ctxt a, MemMonad ctxt mem ix a m, ForMonad ctxt ix m)
          => PushT m ix a -> PushT m ix a
 force p = Force p (len p) 
-{-   
+
 ---------------------------------------------------------------------------
--- Simple program
+-- Simple programs
 ---------------------------------------------------------------------------
--}
+
 
 input11 = Pull (\i -> i) 16
 test11 :: (Num a, Num ix,
