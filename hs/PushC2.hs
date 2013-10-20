@@ -92,22 +92,22 @@ instance MemMonad Empty IOArray Int a IO where
 ---------------------------------------------------------------------------
 -- Push array
 --------------------------------------------------------------------------- 
-data Push m ix a = Push (PushT ix a m)  Length 
+data Push m ix a = Push (PushT m ix a)  Length 
 
 
 ---------------------------------------------------------------------------
 -- Write Function language
 ---------------------------------------------------------------------------
-data Write ix a m where
-  MapW :: Write ix b m -> (a -> b) -> Write ix a m
-  ApplyW :: (ix -> a -> m ()) -> Write ix a m
-  VectorW :: (ctxt a,  MemMonad ctxt mem ix a m) => mem ix a -> Write ix a m
+data Write m ix a where
+  MapW :: Write m ix b -> (a -> b) -> Write m ix a
+  ApplyW :: (ix -> a -> m ()) -> Write m ix a
+  VectorW :: (ctxt a,  MemMonad ctxt mem ix a m) => mem ix a -> Write m ix a
 
-  IMapW :: Write ix b m -> (a -> ix -> b) -> Write ix a m
+  IMapW :: Write m ix b -> (a -> ix -> b) -> Write m ix a
 
-  IxMapW :: Write ix a m -> (ix -> ix) -> Write ix a m
+  IxMapW :: Write m ix a -> (ix -> ix) -> Write m ix a
 
-  AppendW :: Write ix a m -> ix -> Write ix a m
+  AppendW :: Write m ix a -> ix -> Write m ix a
 
 {-   
 
@@ -133,7 +133,7 @@ data Write ix a m where
 -- Apply Write 
 ---------------------------------------------------------------------------
   
-applyW :: Num ix => Write ix a m -> (ix -> a -> m ())
+applyW :: Num ix => Write m ix a -> (ix -> a -> m ())
 applyW (MapW k f) =  \i a -> applyW k i (f a)
 applyW (ApplyW k) = k
 applyW (VectorW v) = \i a -> write v i a
@@ -176,24 +176,38 @@ applyW (FoldW r f) = \i b ->
 ---------------------------------------------------------------------------
 -- Push Language
 ---------------------------------------------------------------------------
-data PushT ix b m  where
-  Map  :: PushT ix a m -> (a -> b) -> PushT ix b m
+data PushT m ix b  where
+  Map  :: PushT m ix a -> (a -> b) -> PushT m ix b
 
   -- array creation 
   Generate :: (Num ix, ForMonad ctxt ix m)
-              => (ix -> b) -> Length -> PushT ix b m
+              => (ix -> b) -> Length -> PushT m ix b
   Use :: (Num ix, ctxt b, ForMonad ctxt ix m , MemMonad ctxt mem ix b m) =>
-         mem ix b -> Length -> PushT ix b m 
+         mem ix b -> Length -> PushT m ix b 
 
   Force :: (Num ix, ctxt b, MemMonad ctxt mem ix b m, ForMonad ctxt ix m)
-           => PushT ix b m -> Length -> PushT ix b m 
+           => PushT m ix b -> Length -> PushT m ix b 
 
-  IxMap :: PushT ix b m -> (ix -> ix) -> PushT ix b m
-  IMap :: PushT ix a m -> (a -> ix -> b) -> PushT ix b m
+  IxMap :: PushT m ix b -> (ix -> ix) -> PushT m ix b
+  IMap :: PushT m ix a -> (a -> ix -> b) -> PushT m ix b
   Iterate :: (Num ix, ForMonad ctxt ix m, MonadRef ctxt m r, ctxt Length,ctxt b)
-             => (b -> b) -> b -> Length -> PushT ix b  m
+             => (b -> b) -> b -> Length -> PushT m ix b 
 
-  Append :: Monad m => ix -> PushT ix b m -> PushT ix b m -> PushT ix b m
+  Append :: Monad m => ix -> PushT m ix b -> PushT m ix b -> PushT m ix b
+
+-- now PushT can be used as the array type (without any Push Wrapper) 
+pushLength :: PushT m ix b -> Length
+pushLength (Generate _ l) = l
+pushLength (Use _ l) = l
+pushLength (Force _ l) = l
+pushLength (Iterate _ _ l) = l
+pushLength (Map p _ )  = pushLength p
+pushLength (IxMap p _) = pushLength p
+pushLength (IMap p _)  = pushLength p
+pushLength (Append _ p1 p2) = pushLength p1 + pushLength p2
+
+len = pushLength 
+
 {-
   
   Unpair :: (ForMonad ctxt m, ctxt Length) => (Index -> (b,b)) -> Length -> PushT b m
@@ -225,7 +239,7 @@ data PushT ix b m  where
 -- Apply
 ---------------------------------------------------------------------------
   
-apply :: PushT ix b m -> (Write ix b m -> m ())
+apply :: PushT m ix b -> (Write m ix b -> m ())
 apply (Map p f) = \k -> apply p (MapW k f)
 apply (Generate ixf n) = \k -> par_ (fromIntegral n) $ \i ->
                            applyW k i (ixf i)
@@ -324,18 +338,25 @@ apply (Force p l) =
 -- Basic functions on push arrays
 ---------------------------------------------------------------------------
 
-len :: Push m ix a -> Length
-len (Push _ n) = n
+--len :: Push m ix a -> Length
+--len (Push _ n) = n
 
-(<:) :: Push m ix a -> (ix -> a -> m ()) -> m () 
-(Push p _) <: k = apply p (ApplyW k)
+--(<:) :: Push m ix a -> (ix -> a -> m ()) -> m () 
+--(Push p _) <: k = apply p (ApplyW k)
+
+(<:) :: PushT m ix a -> (ix -> a -> m ()) -> m () 
+p <: k = apply p (ApplyW k)
 
 -- (<~:) :: Push m a -> Write a m ~> m () 
-(Push p _) <~: k = apply p k
+--(Push p _) <~: k = apply p k
 
+--use :: (Num ix, ctxt a, ForMonad ctxt ix m, MemMonad ctxt mem ix a m)
+--       => mem ix a -> Length -> Push m ix a
+--use mem l = Push (Use mem l) l
 use :: (Num ix, ctxt a, ForMonad ctxt ix m, MemMonad ctxt mem ix a m)
-       => mem ix a -> Length -> Push m ix a
-use mem l = Push (Use mem l) l
+       => mem ix a -> Length -> PushT m ix a
+use mem l = Use mem l
+
 
 -- undefunctionalised 
 --  where
@@ -346,26 +367,43 @@ use mem l = Push (Use mem l) l
 --        k ix a 
 
 
-map :: (a -> b) -> Push m ix a -> Push m ix b
-map f (Push p l) = Push (Map p f) l
- 
-imap :: (a -> ix -> b) -> Push m ix a -> Push m ix b
-imap f (Push p l) = Push (IMap p f) l 
+--map :: (a -> b) -> Push m ix a -> Push m ix b
+--map f (Push p l) = Push (Map p f) l
 
-ixmap :: (ix -> ix) -> Push m ix a -> Push m ix a
-ixmap f (Push p l) = Push (IxMap p f) l 
+map :: (a -> b) -> PushT m ix a -> PushT m ix b
+map f p= Map p f
 
-(++) :: (Num ix, Monad m) =>  Push m ix a -> Push m ix a  -> Push m ix a
-(Push p1 l1) ++ (Push p2 l2) = 
-  Push (Append (fromIntegral l1) p1 p2) (l1 + l2) 
+--imap :: (a -> ix -> b) -> Push m ix a -> Push m ix b
+--imap f (Push p l) = Push (IMap p f) l 
+imap :: (a -> ix -> b) -> PushT m ix a -> PushT m ix b
+imap f p = IMap p f
 
 
-reverse :: Num ix => Push m ix a -> Push m ix a
+--ixmap :: (ix -> ix) -> Push m ix a -> Push m ix a
+--ixmap f (Push p l) = Push (IxMap p f) l 
+ixmap :: (ix -> ix) -> PushT m ix a -> PushT m ix a
+ixmap f p = IxMap p f
+
+
+--(++) :: (Num ix, Monad m) =>  Push m ix a -> Push m ix a  -> Push m ix a
+--(Push p1 l1) ++ (Push p2 l2) = 
+--  Push (Append (fromIntegral l1) p1 p2) (l1 + l2) 
+
+(++) :: (Num ix, Monad m) =>  PushT m ix a -> PushT m ix a  -> PushT m ix a
+p1 ++ p2 = Append (fromIntegral $ len p1) p1 p2  
+
+--reverse :: Num ix => Push m ix a -> Push m ix a
+--reverse p = ixmap (\i -> (fromIntegral (len p - 1)) - i) p
+
+reverse :: Num ix => PushT m ix a -> PushT m ix a
 reverse p = ixmap (\i -> (fromIntegral (len p - 1)) - i) p
 
+--iterate :: (Num ix, ForMonad ctxt ix m, MonadRef ctxt m r, ctxt Length, ctxt a)
+--           => Length -> (a -> a) -> a -> Push m ix a
+--iterate n f a = Push (Iterate f a n) n
 iterate :: (Num ix, ForMonad ctxt ix m, MonadRef ctxt m r, ctxt Length, ctxt a)
-           => Length -> (a -> a) -> a -> Push m ix a
-iterate n f a = Push (Iterate f a n) n 
+           => Length -> (a -> a) -> a -> PushT m ix a
+iterate n f a = Iterate f a n
 {- 
 ---------------------------------------------------------------------------
 -- unpair / interleave 
@@ -472,12 +510,12 @@ zipByPermute p1 p2 =
 ---------------------------------------------------------------------------
 
 push (Pull ixf n) =
-  Push (Generate ixf n) n  
+  Generate ixf n
 
 class ToPush m arr where
-  toPush ::  arr ix a -> Push m ix a
+  toPush ::  arr ix a -> PushT m ix a
 
-instance Monad m => ToPush m (Push m) where
+instance Monad m => ToPush m (PushT m) where
   toPush = id
 
 --instance (PullFrom c, ForMonad ctxt m, ctxt Length, ctxt Index) => ToPush m c where
@@ -488,15 +526,15 @@ instance Monad m => ToPush m (Push m) where
 -- write to vector
 --------------------------------------------------------------------------- 
 
-freeze :: (ctxt a, MemMonad ctxt mem ix a m) => Push m ix a -> m (mem ix a)
-freeze (Push p l) =
+freeze :: (ctxt a, MemMonad ctxt mem ix a m) => PushT m ix a -> m (mem ix a)
+freeze p =
   do
-     arr <- allocate l 
+     arr <- allocate (len p) 
      apply p (VectorW arr)
      return arr
      -- A.freeze arr
 
-toVector :: (ctxt a, MemMonad ctxt mem ix a m) => Push m ix a -> m (mem ix a)
+toVector :: (ctxt a, MemMonad ctxt mem ix a m) => PushT m ix a -> m (mem ix a)
 toVector = freeze 
 
 ---------------------------------------------------------------------------
@@ -504,8 +542,8 @@ toVector = freeze
 ---------------------------------------------------------------------------
      
 force :: (Num ix, ctxt a, MemMonad ctxt mem ix a m, ForMonad ctxt ix m)
-         => Push m ix a -> Push m ix a
-force (Push p l) = Push (Force p l) l
+         => PushT m ix a -> PushT m ix a
+force p = Force p (len p) 
 {-   
 ---------------------------------------------------------------------------
 -- Simple program
@@ -516,20 +554,33 @@ input11 = Pull (\i -> i) 16
 test11 :: (Num a, Num ix,
            ctxt a, MemMonad ctxt mem ix a m,
            ForMonad ctxt ix m)
-          => Pull ix a -> Push m ix a
+          => Pull ix a -> PushT m ix a
 test11 = map (+1) . force . map (+1) . push  
 
-compileTest11 = runCM 0 $ toVector (test11 input11 :: Push CompileMonad (Expr Int) (Expr Int))
-runTest11 = toVector (test11 input11 :: Push IO Int Int)
+compileTest11 = runCM 0 $ toVector (test11 input11 :: PushT CompileMonad (Expr Int) (Expr Int))
+runTest11 = toVector (test11 input11 :: PushT IO Int Int)
 
 runTest11' = do { s <- runTest11; (getElems s)}
 
 
 usePrg :: (Num a, Num ix, ctxt a, MemMonad ctxt mem ix a m, ForMonad ctxt ix m)
-          => mem ix a -> Push m ix a 
+          => mem ix a -> PushT m ix a 
 usePrg input = map (+1) (use input 10 )
 
-compileUsePrg = runCM 0 $ toVector ((usePrg  (CMMem "input1" 10)) :: Push CompileMonad (Expr Int) (Expr Int))
+compileUsePrg = runCM 0 $ toVector ((usePrg  (CMMem "input1" 10)) :: PushT CompileMonad (Expr Int) (Expr Int))
+
+-- Maybe this program should be possible?
+{- 
+monadic1 :: (Num ix, ctxt a, ForMonad ctxt ix m, MemMonad ctxt mem ix ix m)
+            => Pull ix ix => m (PushT m ix ix) 
+monadic1 arr =
+  do mem <- freeze $ push arr
+     a   <- read mem 3 
+     let arr1 = Pull (\i -> i) a -- impossible
+     push arr1    
+-} 
+  
+
 
 
 ---------------------------------------------------------------------------
