@@ -309,6 +309,7 @@ len (Push _ n) = n
 -- (<~:) :: Push m a -> Write a m ~> m () 
 (Push p _) <~: k = apply p k
 
+      
 
 map :: (a -> b) -> Push m a -> Push m b
 map f (Push p l) = Push (Map p f) l
