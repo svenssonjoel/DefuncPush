@@ -75,7 +75,8 @@ instance RefMonad IO r => MonadRef Empty IO r where
 ---------------------------------------------------------------------------
 -- Monad with Memory 
 ---------------------------------------------------------------------------
-class Monad m => MemMonad ctxt mem ix a m | m -> mem, m -> ctxt where
+class Monad m => MemMonad (ctxt :: * -> Constraint) mem ix a m
+  | m -> mem, m -> ctxt where
   allocate :: ctxt a => Length -> m (mem ix a)
   write :: ctxt a => mem ix a -> ix -> a -> m ()
   read  :: ctxt a => mem ix a -> ix -> m a
@@ -507,9 +508,21 @@ force p = Force p (len p)
 ---------------------------------------------------------------------------
 -- Simple programs
 ---------------------------------------------------------------------------
+simple1 :: (Num a, Num ix, ForMonad ctxt ix m)
+         => Pull ix a -> PushT m ix a
+simple1 = map (+1) . push 
+
+compileSimple1 = runCM 0 $ toVector ( simple1 input11 :: PushT CompileMonad (Expr Int) (Expr Int))
+runSimple1 = getElems =<< toVector (simple1 input11 :: PushT IO Int Int)
 
 
-input11 = Pull (\i -> i) 16
+fusion  :: (Num a, Num ix, ForMonad ctxt ix m)
+         => Pull ix a -> PushT m ix a
+fusion = map (+1) . map (*2) . push 
+
+compileFusion = runCM 0 $ toVector ( fusion input11 :: PushT CompileMonad (Expr Int) (Expr Int))
+
+input11 = Pull id 16
 test11 :: (Num a, Num ix,
            ctxt a, MemMonad ctxt mem ix a m,
            ForMonad ctxt ix m)
@@ -573,7 +586,7 @@ data Value = IntVal Int
 
 data Exp = Var Id
          | Literal Value
-         | Index Id Exp
+--          | Index Id Exp
          | Exp :+: Exp
          | Exp :-: Exp
          | Exp :*: Exp
@@ -681,7 +694,7 @@ instance Expable (Expr Float) where
   typeOf _ = Float
 
 
-class Monad m => MonadRef ctxt m r | m -> r, m -> ctxt where
+class Monad m => MonadRef (ctxt :: * -> Constraint)  m r | m -> r, m -> ctxt where
   newRef_ :: ctxt a => a -> m (r a)
   readRef_ :: ctxt a => r a -> m a
   writeRef_ :: ctxt a => r a -> a -> m ()

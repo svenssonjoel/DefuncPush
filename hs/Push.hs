@@ -29,7 +29,21 @@ type Length = Int
 -- Pull array
 ---------------------------------------------------------------------------
 
-data Pull a = Pull (Index -> a) Length 
+data Pull a = Pull (Index -> a) Length
+
+
+computePull :: PrimMonad m => Pull a -> m (V.Vector a)
+computePull (Pull f n) =
+  do mem <- M.new n
+     forM_ [0..n-1] $ \ix ->
+       M.write mem ix (f ix)
+     V.freeze mem
+
+
+--  arr <- M.new l
+--     p (\i a -> M.write arr i a)
+--     V.freeze arr 
+
 
 ---------------------------------------------------------------------------
 -- Push array
@@ -349,7 +363,7 @@ freeze :: PrimMonad m => Push m a -> m (V.Vector a)
 freeze (Push p l) =
   do
      arr <- M.new l
-     p (\i a -> M.write arr i a)
+     p $ M.write arr
      V.freeze arr 
 
 
