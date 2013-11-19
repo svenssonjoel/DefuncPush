@@ -378,6 +378,14 @@ force (Push p l) = Push q l
       forM_ [0..l-1] $ \ix ->
         k ix (ixf ix) 
 
+---------------------------------------------------------------------------
+-- Conditional Push array 
+---------------------------------------------------------------------------
+
+select :: Bool -> Push m a -> Push m a -> Push m a
+select b (Push p1 n1) (Push p2 n2)  =
+  Push (\k -> if b then p1 k else p2 k) (if b then n1 else n2) 
+
 
 ---------------------------------------------------------------------------
 -- Simple program
