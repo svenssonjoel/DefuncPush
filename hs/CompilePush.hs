@@ -109,7 +109,7 @@ data PushT b  where
 
 data Push a = Push (PushT a) (CompileMonad Length) 
 
-len (Push _ l) =  l -- pushLength 
+len (Push _ l) =  l 
 
 ---------------------------------------------------------------------------
 -- Apply
@@ -344,31 +344,45 @@ monadic1 arr =
 -- Transform a program that computes a Push array
 -- to a program that computes a single element.
 
-{-
-indexP :: Expable a => PushT a -> Ix -> CompileMonad a
+index :: Expable a => Push a -> CM Ix -> CompileMonad a
+index (Push p n) ix = indexP p ix 
+  
+indexP :: Expable a => PushT a -> CM Ix -> CompileMonad a
 indexP (Map p f) ix        = liftM f (indexP p ix)
-indexP (Generate ixf n) ix = return $ ixf ix
-indexP (Use mem l) ix      = read mem ix
-indexP (IMap p f)  ix      = liftM (\a -> f a ix) (indexP p ix)
+indexP (Generate ixf n) ix = liftM ixf ix
+
+indexP (Use mem l) ix      = do i <- ix
+                                read mem i
+
+indexP (IMap p f)  ix      = do i <- ix
+                                liftM (\a -> f a i) (indexP p ix)
+
 indexP (Force p l) ix      = indexP p ix
-indexP (IxMap p f) ix      = indexP p (f ix)
+
+indexP (IxMap p f) ix      = do i <- ix
+                                indexP p (f i)
+
 indexP (Iterate f a l) ix  =
-  do sum <- newRef_ a 
-     for_ ix $ \(i :: Expr Int) -> 
+  do sum <- newRef_ a
+     ix' <- ix
+     for_ ix' $ \(i :: Expr Int) -> 
          do val <- readRef_ sum
             writeRef_ sum (f val)
      readRef_ sum
-
+ 
 -- need conditionals in language. 
 indexP (Append l p1 p2) ix = do
-  r <- mkRef_ 
-  cond (ix >* l)
-       (do a <- indexP p2 (ix - l)
+  r <- mkRef_
+  ix' <- ix
+  l' <- l
+  cond (ix' >* l')
+       (do a <- indexP p2 (return $ ix' - l')
            writeRef_ r a)
-       (do a <- indexP p1 ix
+       (do a <- indexP p1 (return $ ix') 
            writeRef_ r a)
   readRef_ r
--}
+
+
 takeSome :: Expable a => Push a -> CM Length -> Push a
 takeSome (Push p l) m = Push (takeSome' p m) m
 
