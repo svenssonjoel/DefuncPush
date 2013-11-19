@@ -35,7 +35,7 @@ import GHC.Prim (Constraint)
 -- Some basics
 ---------------------------------------------------------------------------
 
-type Length = Int
+type Length = Expr Int
 
 type Ix = Expr Int 
 type LEN = Expr Int 
@@ -58,52 +58,6 @@ class PullFrom c where
 instance PullFrom Pull where
   pullFrom = id 
 
-{- 
----------------------------------------------------------------------------
--- Monad with For
----------------------------------------------------------------------------
-class Monad m => ForMonad (ctxt :: * -> Constraint) ix m | m -> ctxt where
-  for_ :: ix -> (ix -> m ()) -> m ()
-  par_ :: ix -> (ix -> m ()) -> m () 
-
-
-instance ForMonad Empty Int IO where
-   for_ n f = forM_  [0..n-1] (f . toEnum)
-   par_ = for_ 
-
-instance RefMonad IO r => MonadRef Empty IO r where
-  newRef_ = newRef
-  readRef_ = readRef
-  writeRef_ = writeRef
--} 
-{- 
----------------------------------------------------------------------------
--- Monad with Memory 
----------------------------------------------------------------------------
-class Monad m => MemMonad (ctxt :: * -> Constraint) mem ix a m
-  | m -> mem, m -> ctxt where
-  allocate :: ctxt a => Length -> m (mem ix a)
-  write :: ctxt a => mem ix a -> ix -> a -> m ()
-  read  :: ctxt a => mem ix a -> ix -> m a
-
-class Empty a
-instance Empty a
-
-instance MemMonad Empty IOArray Int a IO where
-  allocate n = newArray_ (0,n-1)
-  write = writeArray 
-  read  = readArray
--} 
----------------------------------------------------------------------------
--- Monad with Conditionals 
----------------------------------------------------------------------------
-{-   
-class Monad m => CondMonad b m | m -> b  where
-  cond ::  b -> m () -> m () -> m ()
-  
-instance CondMonad Bool IO where
-  cond b e1 e2 = if b then e1 else e2 
--} 
 ---------------------------------------------------------------------------
 -- Write Function language
 ---------------------------------------------------------------------------
@@ -114,7 +68,7 @@ data Write a where
 
   IMapW :: Write b -> (a -> Ix -> b) -> Write a
 
-  IxMapW :: Write a -> (Ix -> Ix) -> Write a
+  IxMapW :: Write a -> (Ix -> CM Ix) -> Write a
 
   AppendW :: Write a -> Length -> Write a
   
@@ -128,7 +82,8 @@ applyW (ApplyW k) = k
 applyW (VectorW v) = \i a -> write v i a
 
 applyW (IMapW k f) = \i a -> applyW k i (f a i)
-applyW (IxMapW k f) = \i a -> applyW k (f i) a
+applyW (IxMapW k f) = \i a -> do ix <- f i
+                                 applyW k ix a
 
 applyW (AppendW k l) = \i a -> applyW k ((fromIntegral l) + i) a
  
@@ -139,29 +94,34 @@ data PushT b  where
   Map  :: (Expable a) => PushT a -> (a -> b) -> PushT b
 
   -- array creation 
-  Generate ::  Expable b => (Ix -> b) -> Length -> PushT b
-  Use :: Expable b => CMMem b -> Length -> PushT b 
+  Generate ::  Expable b => (Ix -> b) -> CM Length -> PushT b
+  Use :: Expable b => CMMem b -> CM Length -> PushT b 
 
-  Force :: Expable b =>  PushT b -> Length -> PushT b 
+  Force :: Expable b =>  PushT b -> CM Length -> PushT b 
 
-  IxMap :: Expable b => PushT b -> (Ix -> Ix) -> PushT b
+  IxMap :: Expable b => PushT b -> (Ix -> CM Ix) -> PushT b
   IMap :: Expable a => PushT a -> (a -> Ix -> b) -> PushT b
-  Iterate :: Expable b => (b -> b) -> b -> Length -> PushT b 
+  Iterate :: Expable b => (b -> b) -> b -> CM Length -> PushT b 
 
-  Append :: Expable b => Length -> PushT b -> PushT b -> PushT b
+  Append :: Expable b => CM Length -> PushT b -> PushT b -> PushT b
 
--- now PushT can be used as the array type (without any Push Wrapper) 
-pushLength :: PushT b -> Length
-pushLength (Generate _ l) = l
-pushLength (Use _ l) = l
-pushLength (Force _ l) = l
-pushLength (Iterate _ _ l) = l
-pushLength (Map p _ )  = pushLength p
-pushLength (IxMap p _) = pushLength p
-pushLength (IMap p _)  = pushLength p
-pushLength (Append _ p1 p2) = pushLength p1 + pushLength p2
 
-len = pushLength 
+data Push a = Push (PushT a) (CompileMonad Length) 
+
+
+-- nowPushT can be used as the array type (without any Push Wrapper)
+-- Go back to push wrapper... bah!
+--pushLength :: PushT b -> Length
+--pushLength (Generate _ l) = l
+--pushLength (Use _ l) = l
+--pushLength (Force _ l) = l
+--pushLength (Iterate _ _ l) = l
+--pushLength (Map p _ )  = pushLength p
+--pushLength (IxMap p _) = pushLength p
+--pushLength (IMap p _)  = pushLength p
+--pushLength (Append _ p1 p2) = pushLength p1 + pushLength p2
+
+len (Push _ l) =  l -- pushLength 
 
 ---------------------------------------------------------------------------
 -- Apply
@@ -169,10 +129,14 @@ len = pushLength
   
 apply :: Expable b => PushT b -> (Write b -> CompileMonad ())
 apply (Map p f) = \k -> apply p (MapW k f)
-apply (Generate ixf n) = \k -> par_ (Literal $ IntVal n) $ \i ->
-                           applyW k i (ixf i)
+apply (Generate ixf n) =
+  \k -> do l <- n
+           par_ (Literal $ IntVal l) $ \i ->
+             applyW k i (ixf i)
 
-apply (Use mem l) = \k -> par_ (Literal $ IntVal l) $ \i ->
+apply (Use mem n) =
+  \k -> do l <- n
+           par_ (Literal $ IntVal l) $ \i ->
                             do a <- read mem i
                                applyW k i a 
 
@@ -181,21 +145,25 @@ apply (IMap p f) = \k -> apply p (IMapW k f)
 
 apply (IxMap p f) = \k -> apply p (IxMapW k f) 
 
-apply (Append l p1 p2) = \k -> apply p1 k >>
-                               apply p2 (AppendW k l)
+apply (Append n p1 p2) =
+  \k -> do l <- n
+           apply p1 k 
+           apply p2 (AppendW k l)
 
 apply (Iterate f a n) = \k ->
   do
+    l <- n
     sum <- newRef_ a 
-    for_ (Literal $ IntVal n) $ \i ->
+    for_ (Literal $ IntVal l) $ \i ->
       do
         val <- readRef_ sum
         applyW k i val 
         writeRef_ sum (f val) 
 
-apply (Force p l) =
-  \k -> do arr <- allocate l
-           apply p  (VectorW arr)
+apply (Force p n) =
+  \k -> do l <- n
+           arr <- allocate l
+           apply p (VectorW arr)
            par_ (Literal $ IntVal  l) $ \ix ->
              do a <- read arr ix
                 applyW k ix a 
@@ -204,11 +172,11 @@ apply (Force p l) =
 -- Basic functions on push arrays
 ---------------------------------------------------------------------------
 -- remove ?
-(<:) :: Expable a => PushT a -> (Ix -> a -> CompileMonad ()) -> CompileMonad () 
-p <: k = apply p (ApplyW k)
+--(<:) :: Expable a => PushT a -> (Ix -> a -> CompileMonad ()) -> CompileMonad () 
+--p <: k = apply p (ApplyW k)
 
-use :: Expable a => CMMem a -> Length -> PushT a
-use mem l = Use mem l
+use :: Expable a => CMMem a -> CM Length -> Push a
+use mem l = Push (Use mem l) l 
 -- undefunctionalised 
 --  where
 --    p k =
@@ -217,23 +185,26 @@ use mem l = Use mem l
 --        a <- read mem ix
 --        k ix a 
 
-map :: Expable a => (a -> b) -> PushT a -> PushT b
-map f p= Map p f
+map :: Expable a => (a -> b) -> Push a -> Push b
+map f (Push p l) = Push (Map p f) l 
 
-imap :: Expable a => (a -> Ix -> b) -> PushT a -> PushT b
-imap f p = IMap p f
+imap :: Expable a => (a -> Ix -> b) -> Push a -> Push b
+imap f (Push p l)  = Push (IMap p f) l 
 
-ixmap :: Expable a => (Ix -> Ix) -> PushT a -> PushT a
-ixmap f p = IxMap p f
+ixmap :: Expable a => (Ix -> CM Ix) -> Push a -> Push a
+ixmap f (Push p l) = Push (IxMap p f) l 
 
-(++) :: Expable a => PushT a -> PushT a  -> PushT a
-p1 ++ p2 = Append (fromIntegral $ len p1) p1 p2  
+(++) :: Expable a => Push a -> Push a  -> Push a
+(Push p1 l1) ++ (Push p2 l2)  = Push (Append l1 p1 p2) (do l1' <- l1
+                                                           l2' <- l2
+                                                           return $ l1' + l2')
 
-reverse :: Expable a => PushT a -> PushT a
-reverse p = ixmap (\i -> (fromIntegral (len p - 1)) - i) p
+reverse :: Expable a => Push a -> Push a
+reverse p = ixmap (\i -> (do n <- len p
+                             return $ n - 1 - i))  p
 
-iterate :: Expable a => Length -> (a -> a) -> a -> PushT a
-iterate n f a = Iterate f a n
+iterate :: Expable a => Length -> (a -> a) -> a -> Push a
+iterate n f a = Push (Iterate f a n) (return n) 
 
 ---------------------------------------------------------------------------
 -- Conversion Pull Push (Clean this mess up)
@@ -411,6 +382,7 @@ data Exp = Var Id
 
 -- Phantomtypes. 
 data Expr a = E {unE :: Exp}
+  deriving Show 
 
 (>*) :: Expr a -> Expr a -> Expr Bool
 (>*) = inj2 Gt
@@ -449,6 +421,8 @@ data CMMem a where
 
 newtype CompileMonad a = CM (StateT Integer (Writer Code) a)
      deriving (Monad, MonadState Integer, MonadWriter Code)
+
+type CM = CompileMonad
 
 
 runCM :: Integer -> CompileMonad a -> Code
