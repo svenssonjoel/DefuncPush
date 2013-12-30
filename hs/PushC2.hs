@@ -486,7 +486,7 @@ index_ (Use m _) ix = read m ix
 index_ (Force p _) ix = index_ p ix
 index_ (IxMap p f) ix = index_ p (f ix) -- ?? Not sure I've used 'f' correct
 
-zip :: PushT m ix a -> PushT m ix a -> PushT m ix a
+
 
 ---------------------------------------------------------------------------
 ---------------------------------------------------------------------------
