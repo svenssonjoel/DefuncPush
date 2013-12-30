@@ -469,7 +469,7 @@ class Monad m => MonadRef (ctxt :: * -> Constraint)  m r | m -> r, m -> ctxt whe
 
 -- # Having indexing and conditionals in the expr type may help.
 
-index_ :: (Monad m, Num ix) => PushT m ix a -> ix -> m a
+index_ :: (Monad m, Num ix, Ord ix) => PushT m ix a -> ix -> m a
 index_ (Map p f) ix = liftM f (index_ p ix)
 index_ (Generate ixf n) ix = return $ ixf ix
 index_ (IMap p f) ix = liftM2 f (index_ p ix) (return ix) 
@@ -479,23 +479,14 @@ index_ (Iterate f a l) ix =
        do val <- readRef_ sum
           writeRef_ sum (f val)
      readRef_ sum
--- needs some work     
--- index_ (Append l p1 p2) ix =
---   do r <- mkRef_
---      cond (ix >* l)
---        (do a <- index_ p2 (return $ ix - l)
---            writeRef_ r a)
---        (do a <- index_ p1 (return $ ix) 
---            writeRef_ r a)
---      readRef_ r
+index_ (Append i p1 p2) ix = if ix < i
+                             then index_ p1 ix
+                             else index_ p2 (ix - i)
+index_ (Use m _) ix = read m ix
+index_ (Force p _) ix = index_ p ix
+index_ (IxMap p f) ix = index_ p (f ix) -- ?? Not sure I've used 'f' correct
 
-
-
-
-
-
-
-
+zip :: PushT m ix a -> PushT m ix a -> PushT m ix a
 
 ---------------------------------------------------------------------------
 ---------------------------------------------------------------------------
