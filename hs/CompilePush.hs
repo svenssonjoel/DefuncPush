@@ -372,11 +372,15 @@ indexP (Iterate f a l) ix  =
  
 -- need conditionals in language. 
 indexP (Append l p1 p2) ix = do
+  r <- mkRef_
   ix' <- ix
-  l'  <- l
-  cond (ix >* l')
-    (indexP p2 (return $ ix' - l'))
-    (indexP p1 (return ix')
+  l' <- l
+  cond (ix' >* l')
+       (do a <- indexP p2 (return $ ix' - l')
+           writeRef_ r a)
+       (do a <- indexP p1 (return $ ix') 
+           writeRef_ r a)
+  readRef_ r
 
 
 takeSome :: Expable a => Push a -> CM Length -> Push a
