@@ -58,32 +58,6 @@ class PullFrom c where
 instance PullFrom Pull where
   pullFrom = id 
 
----------------------------------------------------------------------------
--- Monad with For
----------------------------------------------------------------------------
---class Monad m => ForMonad (ctxt :: * -> Constraint) ix m | m -> ctxt where
---  for_ :: ix -> (ix -> m ()) -> m ()
---  par_ :: ix -> (ix -> m ()) -> m () 
-
-
---instance ForMonad Empty Int IO where
---   for_ n f = forM_  [0..n-1] (f . toEnum)
---   par_ = for_ 
-
---instance RefMonad IO r => MonadRef Empty IO r where
---  newRef_ = newRef
---  readRef_ = readRef
---  writeRef_ = writeRef
-
-
----------------------------------------------------------------------------
--- Monad with Conditionals 
----------------------------------------------------------------------------
-class Monad m => CondMonad b m | m -> b  where
-  cond ::  b -> m () -> m () -> m ()
-  
-instance CondMonad Bool IO where
-  cond b e1 e2 = if b then e1 else e2 
 
 ---------------------------------------------------------------------------
 -- Write Function language
