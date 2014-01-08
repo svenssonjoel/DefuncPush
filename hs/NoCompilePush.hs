@@ -20,13 +20,13 @@ import Control.Monad
 import Control.Monad.ST
 
 import Control.Monad.Writer
-import Control.Monad.State 
+import Control.Monad.State
+import Control.Monad.Primitive
 import Data.RefMonad
 
--- replaces the above
-import Data.Array.MArray hiding (freeze, Ix)
-import Data.Array.IO hiding (freeze, Ix)
-import qualified Data.Array.IO as A 
+
+import qualified Data.Vector as V
+import qualified Data.Vector.Mutable as M 
 
 import Prelude hiding (reverse,scanl,map,read)
 import qualified Prelude as P 
@@ -65,7 +65,7 @@ instance PullFrom Pull where
 data Write m a where
   MapW :: Write m b -> (a -> b) -> Write m a
   ApplyW :: (Ix -> a -> m ()) -> Write m a
-  VectorW :: IOArray Int a -> Write IO a
+  VectorW :: PrimMonad m => M.MVector (PrimState m) a -> Write m a
 
   IMapW :: Write m b -> (a -> Ix -> b) -> Write m a
 
@@ -81,7 +81,7 @@ data Write m a where
 applyW :: Write m a -> (Ix -> a -> m ())
 applyW (MapW k f) =  \i a -> applyW k i (f a)
 applyW (ApplyW k) = k
-applyW (VectorW v) = \i a -> writeArray v i a
+applyW (VectorW v) = \i a -> M.write v i a
 
 applyW (IMapW k f) = \i a -> applyW k i (f a i)
 applyW (IxMapW k f) = \i a -> applyW k (f i) a
@@ -96,9 +96,9 @@ data PushT m b  where
 
   -- array creation 
   Generate :: Monad m => (Ix -> b) -> Length -> PushT m b
-  Use :: IOArray Int b -> Length -> PushT IO b 
+  Use :: (PrimMonad m) => V.Vector b -> Length -> PushT m b 
 
-  Force :: PushT IO b -> Length -> PushT IO b 
+  Force :: PrimMonad m => PushT m b -> Length -> PushT m b 
 
   IxMap :: PushT m b -> (Ix -> Ix) -> PushT m b
   IMap :: PushT m a -> (a -> Ix -> b) -> PushT m b
@@ -130,8 +130,8 @@ apply (Generate ixf n) = \k -> forM_ [0..(fromIntegral n-1)] $ \i ->
                            applyW k i (ixf i)
 
 apply (Use mem l) = \k -> forM_ [0..(fromIntegral l-1)] $ \i ->
-                            do a <- readArray mem i
-                               applyW k i a 
+                            --do a <- readArray mem i
+                               applyW k i (mem V.! i) -- a 
 
 
 apply (IMap p f) = \k -> apply p (IMapW k f)
@@ -153,11 +153,12 @@ apply (Iterate f a n) = \k ->
 
 
 apply (Force p l) =
-  \k -> do arr <- newArray_ (0,l-1)
+  \k -> do arr <- M.new l -- newArray_ (0,l-1)
            apply p  (VectorW arr)
+           imm <- V.freeze arr
            forM_ [0..(fromIntegral l-1)] $ \ix ->
-             do a <- readArray arr ix
-                applyW k ix a 
+             -- do a <- readArray arr ix
+                applyW k ix (imm V.! ix) 
         
 
 ---------------------------------------------------------------------------
@@ -167,7 +168,7 @@ apply (Force p l) =
 (<:) :: PushT m a -> (Ix -> a -> m ()) -> m () 
 p <: k = apply p (ApplyW k)
 
-use :: IOArray Int a -> Length -> PushT IO a
+use :: PrimMonad m => V.Vector a -> Length -> PushT m a
 use mem l = Use mem l
 -- undefunctionalised 
 --  where
@@ -212,21 +213,21 @@ instance Monad m => ToPush m (PushT m) where
 -- write to vector
 --------------------------------------------------------------------------- 
 
-freeze :: PushT IO a -> IO (IOArray Int a)
+freeze :: PrimMonad m => PushT m a -> m (V.Vector a)
 freeze p =
   do
-     arr <- newArray_ (0,(len p)-1) 
+     arr <- M.new (len p) -- newArray_ (0,(len p)-1) 
      apply p (VectorW arr)
-     return arr
+     V.freeze arr
 
-toVector :: PushT IO a -> IO (IOArray Int a)
+toVector :: PrimMonad m => PushT m a -> m (V.Vector a)
 toVector = freeze 
 
 ---------------------------------------------------------------------------
 -- A defunctionalisable "freeze", called force. 
 ---------------------------------------------------------------------------
      
-force :: PushT IO a -> PushT IO a
+force :: PrimMonad m => PushT m a -> PushT m a
 force p = Force p (len p) 
 
 ---------------------------------------------------------------------------
@@ -237,7 +238,7 @@ input11 = Pull id 16
 --          => Pull ix a -> PushT m ix a
 simple1 = map (+1) . push 
 
-runSimple1 = getElems =<< toVector (simple1 input11 :: PushT IO Int)
+runSimple1 = toVector (simple1 input11 :: PushT IO Int)
 
 
 -- fusion  :: (Num a, Num ix, ForMonad ctxt ix m)
