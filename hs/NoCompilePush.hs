@@ -12,6 +12,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 
+{-# LANGUAGE NoMonomorphismRestriction #-} 
 
 module NoCompilePush where
 
@@ -203,7 +204,7 @@ ixmap f p = IxMap p f
 p1 ++ p2 = Append (fromIntegral $ len p1) p1 p2  
 
 interleave :: Monad m => PushT m a -> PushT m a -> PushT m a
-interleave p1 p2 = Interleave p1 p2   -- 
+interleave p1 p2 = Interleave p1 p2 
 
 
 
@@ -252,12 +253,23 @@ force p = Force p (len p)
 ---------------------------------------------------------------------------
 -- Simple programs
 ---------------------------------------------------------------------------
-input11 = Pull id 16
--- simple1 :: (Num a, Num ix, ForMonad ctxt ix m)
---          => Pull ix a -> PushT m ix a
+input1 = Pull id 16
+
 simple1 = map (+1) . push 
 
-runSimple1 = toVector (simple1 input11 :: PushT IO Int)
+runSimple1 = toVector (simple1 input1 :: PushT IO Int)
+-- Above: uses pull array for inputs 
+
+
+
+-- Example without pull arrays entirely
+myVec = V.fromList [0..9] 
+
+usePrg :: (Enum b, Num b, PrimMonad m) => PushT m b
+usePrg = map (+1) (use myVec 10 )
+
+runUse = toVector (usePrg :: PushT IO Int) 
+
 
 
 -- fusion  :: (Num a, Num ix, ForMonad ctxt ix m)
@@ -276,22 +288,23 @@ runSimple1 = toVector (simple1 input11 :: PushT IO Int)
 
 -- usePrg :: (Num a, Num ix, ctxt a, MemMonad ctxt mem ix a m, ForMonad ctxt ix m)
 --           => mem ix a -> PushT m ix a 
--- usePrg input = map (+1) (use input 10 )
+-- 
 
 ---------------------------------------------------------------------------
 -- Experiments Push a -> Pull a
 ---------------------------------------------------------------------------
 
-index_ :: (Monad m) => PushT m a -> Ix -> m a
-index_ (Map p f) ix = liftM f (index_ p ix)
-index_ (Generate ixf n) ix = return $ ixf ix
-index_ (IMap p f) ix = liftM2 f (index_ p ix) (return ix) 
-index_ (Iterate f a l) ix =
-  do sum <- newRef a
-     forM_ [0..ix-1] $ \i -> 
-       do val <- readRef sum
-          writeRef sum (f val)
-     readRef sum
+index_ :: PushT m a -> Ix -> a
+index_ (Map p f) ix = f (index_ p ix)
+index_ (Generate ixf n) ix = ixf ix
+index_ (IMap p f) ix = f (index_ p ix) ix
+index_ (Iterate f a l) ix = P.iterate f a P.!! ix 
+--index_ (Iterate f a l) ix =
+--  do sum <- newRef a
+--     forM_ [0..ix-1] $ \i -> 
+--       do val <- readRef sum
+--          writeRef sum (f val)
+--     readRef sum
 index_ (Append l p1 p2) ix =
   if (ix < l)
   then index_ p1 ix
@@ -300,6 +313,32 @@ index_ (Interleave p1 p2) ix =
   if (ix `mod` 2 == 0)
   then index_ p1 (ix `div` 2)
   else index_ p2 (ix `div` 2) 
+
+
+---------------------------------------------------------------------------
+-- Push to Pull
+---------------------------------------------------------------------------
+
+convert :: PushT m a -> Pull a
+convert p = Pull (\ix -> index_ p ix) (len p) 
+
+---------------------------------------------------------------------------
+-- Functions from Pull array library
+---------------------------------------------------------------------------
+-- zip, take, drop, head
+
+zipP :: Monad m => PushT m a -> PushT m b -> PushT m (a,b)
+--zipP = undefined -- (and tricky)
+-- Cheat sol.
+zipP p1 p2 = push $ zipPull (convert p1) (convert p2) 
+-- converting pull to push is cheap.
+-- But the convert function kind-of-cheats in the iterate case. 
+
+head :: PushT m a -> a
+head p = index_ p 0 
+
+
+
 
 
 
