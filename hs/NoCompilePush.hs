@@ -271,6 +271,15 @@ usePrg = map (+1) (use myVec 10 )
 runUse = toVector (usePrg :: PushT IO Int) 
 
 
+-- zipP test
+prg = zipP (use myVec 10) (use myVec 10)
+
+runPrg = toVector (prg :: PushT IO (Int,Int))
+-- Running this requires a Use case in index_
+-- which requires index_ to be monadic
+-- which requires there to be a function push :: Pull (m a) -> Push m a
+--   for the cheat version of zipP to work 
+
 
 -- fusion  :: (Num a, Num ix, ForMonad ctxt ix m)
 --          => Pull ix a -> PushT m ix a
@@ -332,6 +341,7 @@ zipP :: Monad m => PushT m a -> PushT m b -> PushT m (a,b)
 -- Cheat sol.
 zipP p1 p2 = push $ zipPull (convert p1) (convert p2) 
 -- converting pull to push is cheap.
+-- Converting a push to pull is potentially costly...
 -- But the convert function kind-of-cheats in the iterate case. 
 
 head :: PushT m a -> a
