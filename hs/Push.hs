@@ -64,6 +64,13 @@ len (Push _ n) = n
 (<:) :: Push m a -> (Index -> a -> m ()) -> m () 
 (Push p _) <: k = p k 
 
+use :: PrimMonad m => V.Vector a -> Length -> Push m a
+use mem l = Push p l
+  where
+    p k = forM_ [0..l-1] $ \ix ->
+            k ix (mem V.! ix) 
+
+
 map :: (a -> b) -> Push m a -> Push m b
 map f (Push p l) = Push (\k -> p (\i a -> k i (f a))) l
 
