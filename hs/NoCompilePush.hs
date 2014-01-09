@@ -70,7 +70,7 @@ data Write m a where
 
   IMapW :: Write m b -> (a -> Ix -> b) -> Write m a
 
-  IxMapW :: Write m a -> (Ix -> Ix) -> Write m  a
+  IxMapW :: Write m a -> (Ix -> Ix) -> Write m a
 
   AppendW :: Write m a -> Ix -> Write m a
 

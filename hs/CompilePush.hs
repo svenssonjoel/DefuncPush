@@ -344,7 +344,7 @@ monadic1 arr =
 -- Transform a program that computes a Push array
 -- to a program that computes a single element.
 
-index :: Expable a => Push a -> CM Ix -> CompileMonad a
+index :: Expable a => Push a -> Ix -> CompileMonad a
 index (Push p n) ix = indexP p ix 
   
 indexP :: Expable a => PushT a -> CM Ix -> CompileMonad a
