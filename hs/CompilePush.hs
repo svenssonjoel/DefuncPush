@@ -67,7 +67,7 @@ data Write a where
 
   IMapW :: Write b -> (a -> Ix -> b) -> Write a
 
-  IxMapW :: Write a -> (Ix -> CM Ix) -> Write a
+  IxMapW :: Write a -> (Ix -> Ix) -> Write a
 
   AppendW :: Write a -> Length -> Write a
   
@@ -81,8 +81,7 @@ applyW (ApplyW k) = k
 applyW (VectorW v) = \i a -> write v i a
 
 applyW (IMapW k f) = \i a -> applyW k i (f a i)
-applyW (IxMapW k f) = \i a -> do ix <- f i
-                                 applyW k ix a
+applyW (IxMapW k f) = \i a -> applyW k (f i) a
 
 applyW (AppendW k l) = \i a -> applyW k (l + i) a
  
@@ -93,21 +92,21 @@ data PushT b  where
   Map  :: (Expable a) => PushT a -> (a -> b) -> PushT b
 
   -- array creation 
-  Generate ::  Expable b => (Ix -> b) -> CM Length -> PushT b
-  Use :: Expable b => CMMem b -> CM Length -> PushT b 
+  Generate ::  Expable b => (Ix -> b) -> Length -> PushT b
+  Use :: Expable b => CMMem b -> Length -> PushT b 
 
-  Force :: Expable b =>  PushT b -> CM Length -> PushT b 
+  Force :: Expable b =>  PushT b -> Length -> PushT b 
 
-  IxMap :: Expable b => PushT b -> (Ix -> CM Ix) -> PushT b
+  IxMap :: Expable b => PushT b -> (Ix -> Ix) -> PushT b
   IMap :: Expable a => PushT a -> (a -> Ix -> b) -> PushT b
-  Iterate :: Expable b => (b -> b) -> b -> CM Length -> PushT b 
+  Iterate :: Expable b => (b -> b) -> b -> Length -> PushT b 
 
-  Append :: Expable b => CM Length -> PushT b -> PushT b -> PushT b
+  Append :: Expable b => Length -> PushT b -> PushT b -> PushT b
 
-  Select :: CM (Expr Bool) -> PushT b -> PushT b -> PushT b
+  Select :: Expr Bool -> PushT b -> PushT b -> PushT b
 
 
-data Push a = Push (PushT a) (CompileMonad Length) 
+data Push a = Push (PushT a) Length
 
 len (Push _ l) =  l 
 
@@ -119,13 +118,13 @@ apply :: Expable b => PushT b -> (Write b -> CompileMonad ())
 apply (Map p f) = \k -> apply p (MapW k f)
 
 apply (Generate ixf n) =
-  \k -> do l <- n
-           par_ l $ \i ->
+  \k -> do -- l <- n
+           par_ n $ \i ->
              applyW k i (ixf i)
 
 apply (Use mem n) =
-  \k -> do l <- n
-           par_ l $ \i ->
+  \k -> do 
+           par_ n $ \i ->
                             do a <- read mem i
                                applyW k i a 
 
@@ -135,24 +134,23 @@ apply (IMap p f) = \k -> apply p (IMapW k f)
 apply (IxMap p f) = \k -> apply p (IxMapW k f) 
 
 apply (Append n p1 p2) =
-  \k -> do l <- n
+  \k -> do -- l <- n
            apply p1 k 
-           apply p2 (AppendW k l)
+           apply p2 (AppendW k n)
 
 apply (Select b p1 p2) = \k ->
   do
     (_,p1') <- localCode $ apply p1 k
     (_,p2') <- localCode $ apply p2 k
-    b' <- b
-    tell $ Cond (unE b') p1'
-                         p2' 
+    -- b' <- b
+    tell $ Cond (unE b) p1' p2' 
 
 apply (Iterate f a n) = \k -> 
   do
-    l <- n
+    -- l <- n
     sum <- newRef_ a 
 
-    for_ l $ \i ->
+    for_ n $ \i ->
       do
         val <- readRef_ sum
         applyW k i val 
@@ -160,10 +158,10 @@ apply (Iterate f a n) = \k ->
 
 
 apply (Force p n) =
-  \k -> do l <- n
-           arr <- allocate l
+  \k -> do -- l <- n
+           arr <- allocate n
            apply p (VectorW arr)
-           par_ l $ \ix ->
+           par_ n $ \ix ->
              do a <- read arr ix
                 applyW k ix a 
         
@@ -174,7 +172,7 @@ apply (Force p n) =
 --(<:) :: Expable a => PushT a -> (Ix -> a -> CompileMonad ()) -> CompileMonad () 
 --p <: k = apply p (ApplyW k)
 
-use :: Expable a => CMMem a -> CM Length -> Push a
+use :: Expable a => CMMem a -> Length -> Push a
 use mem l = Push (Use mem l) l 
 -- undefunctionalised 
 --  where
@@ -190,37 +188,33 @@ map f (Push p l) = Push (Map p f) l
 imap :: Expable a => (a -> Ix -> b) -> Push a -> Push b
 imap f (Push p l)  = Push (IMap p f) l 
 
-ixmap :: Expable a => (Ix -> CM Ix) -> Push a -> Push a
+ixmap :: Expable a => (Ix -> Ix) -> Push a -> Push a
 ixmap f (Push p l) = Push (IxMap p f) l 
 
 
 (++) :: Expable a => Push a -> Push a  -> Push a
-(Push p1 l1) ++ (Push p2 l2)  = Push (Append l1 p1 p2) (do l1' <- l1
-                                                           l2' <- l2
-                                                           return $ l1' + l2')
+(Push p1 l1) ++ (Push p2 l2)  = Push (Append l1 p1 p2) (l1 + l2)
 
 reverse :: Expable a => Push a -> Push a
-reverse p = ixmap (\i -> (do n <- len p
-                             return $ n - 1 - i))  p
+reverse p = ixmap (\i -> (len p - 1 - i))  p
 
 iterate :: Expable a => Length -> (a -> a) -> a -> Push a
-iterate n f a = Push (Iterate f a (return n)) (return n) 
+iterate n f a = Push (Iterate f a n) n 
 
 ---------------------------------------------------------------------------
 -- Conversion Pull Push (Clean this mess up)
 ---------------------------------------------------------------------------
 
 push (Pull ixf n) =
-  Push (Generate ixf (return n)) (return n)
+  Push (Generate ixf n) n
 
 ---------------------------------------------------------------------------
 -- write to vector
 --------------------------------------------------------------------------- 
 
 freeze :: (Expable a) => Push a -> CompileMonad (CMMem a)
-freeze (Push p l)  =
+freeze (Push p n)  =
   do
-     n <- l 
      arr <- allocate n 
      apply p (VectorW arr)
      return arr
@@ -238,17 +232,17 @@ force (Push p l)  = Push (Force p l) l
 ---------------------------------------------------------------------------
 -- Conditional Push array ? 
 ---------------------------------------------------------------------------
-select :: CM (Expr Bool) -> Push a -> Push a -> Push a
+select :: Expr Bool -> Push a -> Push a -> Push a
 --select b (Push p1 n1) (Push p2 n2)  =
 --  Push (\k -> if b then p1 k else p2 k) (if b then n1 else n2)
 select b (Push p1 l1) (Push p2 l2) =
-  Push (Select b p1 p2) (do n1 <- l1
-                            n2 <- l2
-                            r <- newRef_ n1
-                            b' <- b
-                            cond b' (return ())
-                                   (writeRef_ r n2)
-                            readRef_ r) 
+  Push (Select b p1 p2) (ifThenElse b l1 l2) -- undefined -- do n1 <- l1
+                            -- n2 <- l2
+                            -- r <- newRef_ n1
+                            -- b' <- b
+                            -- cond b (return ())
+                            --        (writeRef_ r n2)
+                            -- readRef_ r) 
 
 
 ---------------------------------------------------------------------------
@@ -275,7 +269,7 @@ simple2 arr = a1 ++ a2
 compileSimple2 = runCM 0 $ toVector ( simple2 input11 :: Push (Expr Int))
 -- runSimple1 = getElems =<< toVector (simple1 input11 :: PushT IO Int Int)
 
-compileSimple2' = runCM 0 $ toVector $ takeSome (simple2 input11 :: Push (Expr Int)) (return (fromIntegral 10))
+compileSimple2' = runCM 0 $ toVector $ takeSome (simple2 input11 :: Push (Expr Int)) (fromIntegral 10)
 
 {-
 -- Simple2
@@ -347,25 +341,23 @@ monadic1 arr =
 index :: Expable a => Push a -> Ix -> CompileMonad a
 index (Push p n) ix = indexP p ix 
   
-indexP :: Expable a => PushT a -> CM Ix -> CompileMonad a
+indexP :: Expable a => PushT a -> Ix -> CompileMonad a
 indexP (Map p f) ix        = liftM f (indexP p ix)
-indexP (Generate ixf n) ix = liftM ixf ix
+indexP (Generate ixf n) ix = return $ ixf ix
 
-indexP (Use mem l) ix      = do i <- ix
-                                read mem i
+indexP (Use mem l) ix      = read mem ix
 
-indexP (IMap p f)  ix      = do i <- ix
-                                liftM (\a -> f a i) (indexP p ix)
+indexP (IMap p f)  ix      = liftM (\a -> f a ix) (indexP p ix)
 
 indexP (Force p l) ix      = indexP p ix
 
-indexP (IxMap p f) ix      = do i <- ix
-                                indexP p (f i)
+-- IxMap Implementation is wrong
+indexP (IxMap p f) ix      = indexP p (f ix)
 
 indexP (Iterate f a l) ix  =
   do sum <- newRef_ a
-     ix' <- ix
-     for_ ix' $ \(i :: Expr Int) -> 
+     -- ix' <- ix
+     for_ ix $ \(i :: Expr Int) -> 
          do val <- readRef_ sum
             writeRef_ sum (f val)
      readRef_ sum
@@ -373,20 +365,20 @@ indexP (Iterate f a l) ix  =
 -- need conditionals in language. 
 indexP (Append l p1 p2) ix = do
   r <- mkRef_
-  ix' <- ix
-  l' <- l
-  cond (ix' >* l')
-       (do a <- indexP p2 (return $ ix' - l')
+  -- ix' <- ix
+  -- l' <- l
+  cond (ix >* l)
+       (do a <- indexP p2 (ix - l)
            writeRef_ r a)
-       (do a <- indexP p1 (return $ ix') 
+       (do a <- indexP p1 ix 
            writeRef_ r a)
   readRef_ r
 
 
-takeSome :: Expable a => Push a -> CM Length -> Push a
+takeSome :: Expable a => Push a -> Length -> Push a
 takeSome (Push p l) m = Push (takeSome' p m) m
 
-takeSome' :: Expable a => PushT a -> CM Length -> PushT a 
+takeSome' :: Expable a => PushT a -> Length -> PushT a 
 takeSome' (Map p f) m = Map (takeSome' p m) f 
 takeSome' (Generate ixf n) m = Generate ixf m --conditionals !
 takeSome' (Use mem l) m = Use mem m -- conditionals !
@@ -395,13 +387,9 @@ takeSome' (Force p l) m = Force (takeSome' p m) m -- conditionals !
 takeSome' (IxMap p f) m = IxMap (takeSome' p m) f
 takeSome' (Iterate f a l) m = Iterate f a m -- conditionals !
 takeSome' (Append l p1 p2) m =  
-  Select (do m' <- m
-             l' <- l
-             return $ m' <=* l')
+  Select (m <=* l)
          (takeSome' p1 m)
-         (Append l (takeSome' p1 m) (takeSome' p2 (do m' <- m
-                                                      l' <- l
-                                                      return $ m'-l')))
+         (Append l (takeSome' p1 m) (takeSome' p2 (m-l)))
 
 
 
@@ -443,12 +431,16 @@ data Exp = Var Id
          | Exp :*: Exp
          | Gt  Exp Exp
          | LEq Exp Exp 
-         | Min Exp Exp 
+         | Min Exp Exp
+         | IfThenElse Exp Exp Exp 
          deriving Show
 
 -- Phantomtypes. 
 data Expr a = E {unE :: Exp}
-  deriving Show 
+  deriving Show
+
+ifThenElse :: Expr Bool -> Expr a -> Expr a -> Expr a
+ifThenElse b e1 e2 = E $ IfThenElse (unE b) (unE e1) (unE e2) 
 
 (>*) :: Expr a -> Expr a -> Expr Bool
 (>*) = inj2 Gt
