@@ -89,6 +89,12 @@ p1 ++ p2 =
 reverse :: Push m a -> Push m a
 reverse p = ixmap (\i -> (len p - 1) - i) p
 
+rev :: Push m a -> Push m a
+rev (Push p n) = Push (\k -> p (\i a -> k (n - 1 - i) a)) n
+
+rotate :: Int -> Push m a -> Push m a
+rotate dist (Push p n) = Push (\k -> p (\i a -> k ((i +  dist) `mod` n) a)) n 
+
 iterate :: Monad m => Length -> (a -> a) -> a -> Push m a
 iterate n f a = Push (\k ->
                        forM_ [0..(n-1)] $ \i -> 

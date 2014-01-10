@@ -110,6 +110,10 @@ data Write m ix a where
 
   IxMapW :: Write m ix a -> (ix -> ix) -> Write m ix a
 
+  ReverseW :: Write m ix a -> Length -> Write m ix a
+  RotateW  :: Integral ix => Write m ix a -> ix -> Length -> Write m ix a 
+  
+  
   AppendW :: Write m ix a -> ix -> Write m ix a
 
 
@@ -124,6 +128,9 @@ applyW (VectorW v) = \i a -> write v i a
 
 applyW (IMapW k f) = \i a -> applyW k i (f a i)
 applyW (IxMapW k f) = \i a -> applyW k (f i) a
+
+applyW (ReverseW k n) = \i a -> applyW k (fromIntegral n - 1 - i) a
+applyW (RotateW k d n)  = \i a -> applyW k ((i + d) `mod` (fromIntegral n)) a
 
 applyW (AppendW k l) = \i a -> applyW k (l + i) a
 
@@ -147,6 +154,9 @@ data PushT m ix b  where
   Iterate :: (Num ix, ForMonad ctxt ix m, MonadRef ctxt m r, ctxt Length,ctxt b)
              => (b -> b) -> b -> Length -> PushT m ix b 
 
+  Reverse :: PushT m ix a -> PushT m ix a
+  Rotate  :: Integral ix => ix -> PushT m ix b -> PushT m ix b
+  
   Append :: (Monad m) => ix -> PushT m ix b -> PushT m ix b -> PushT m ix b
 
 -- now PushT can be used as the array type (without any Push Wrapper) 
@@ -179,7 +189,12 @@ apply (Use mem l) = \k -> par_ (fromIntegral l) $ \i ->
 
 apply (IMap p f) = \k -> apply p (IMapW k f)
 
-apply (IxMap p f) = \k -> apply p (IxMapW k f) 
+apply (IxMap p f) = \k -> apply p (IxMapW k f)
+
+
+apply (Reverse p) = \k -> apply p (ReverseW k (len p))
+
+apply (Rotate i p) = \k -> apply p (RotateW k i (len p))
 
 apply (Append l p1 p2) = \k -> apply p1 k >>
                                apply p2 (AppendW k l)
@@ -235,6 +250,12 @@ p1 ++ p2 = Append (fromIntegral $ len p1) p1 p2
 
 reverse :: Num ix => PushT m ix a -> PushT m ix a
 reverse p = ixmap (\i -> (fromIntegral (len p - 1)) - i) p
+
+rev :: PushT m ix a -> PushT m ix a
+rev p = Reverse p
+
+rotate :: (Integral ix, Num ix) => ix -> PushT m ix a -> PushT m ix a
+rotate i p = Rotate i p
 
 iterate :: (Num ix, ForMonad ctxt ix m, MonadRef ctxt m r, ctxt Length, ctxt a)
            => Length -> (a -> a) -> a -> PushT m ix a
@@ -348,6 +369,7 @@ data Exp = Var Id
          | Exp :-: Exp
          | Exp :*: Exp
          | Exp :>: Exp
+         | Mod Exp Exp 
          deriving Show
 
 -- Phantomtypes. 
@@ -363,7 +385,16 @@ inj1 f e = inj $ f (unE e)
 inj2 :: (Exp -> Exp -> Exp) -> (Expr a -> Expr b -> Expr c)
 inj2 f e1 e2  = inj $ f (unE e1) (unE e2)
 
-instance Num a => Num (Expr Int)  where
+-- Cheating 
+instance Real (Expr Int)
+instance Enum (Expr Int)
+instance Ord  (Expr Int)
+instance Eq   (Expr Int)
+
+instance Integral (Expr Int) where
+  mod = inj2 Mod 
+
+instance Num (Expr Int)  where
   (+) = inj2 (:+:)
   (-) = inj2 (:-:)
   (*) = inj2 (:*:)
@@ -371,7 +402,7 @@ instance Num a => Num (Expr Int)  where
   signum = error "Signum: Not implemented" 
   fromInteger = inj . Literal . IntVal . fromInteger
 
-instance Num a => Num (Expr Float)  where
+instance Num (Expr Float)  where
   (+) = inj2 (:+:)
   (-) = inj2 (:-:)
   (*) = inj2 (:*:)
