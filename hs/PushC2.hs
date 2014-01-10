@@ -168,6 +168,8 @@ pushLength (Iterate _ _ l) = l
 pushLength (Map p _ )  = pushLength p
 pushLength (IxMap p _) = pushLength p
 pushLength (IMap p _)  = pushLength p
+pushLength (Reverse p) = pushLength p
+pushLength (Rotate s p) = pushLength p 
 pushLength (Append _ p1 p2) = pushLength p1 + pushLength p2
 
 len = pushLength 
@@ -301,7 +303,7 @@ force p = Force p (len p)
 ---------------------------------------------------------------------------
 simple1 :: (Num a, Num ix, ForMonad ctxt ix m)
          => Pull ix a -> PushT m ix a
-simple1 = map (+1) . push 
+simple1 = rev . map (+1) . push 
 
 compileSimple1 = runCM 0 $ toVector ( simple1 input11 :: PushT CompileMonad (Expr Int) (Expr Int))
 runSimple1 = getElems =<< toVector (simple1 input11 :: PushT IO Int Int)

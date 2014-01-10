@@ -11,8 +11,8 @@
 {-# LANGUAGE KindSignatures #-} 
 {-# LANGUAGE ScopedTypeVariables #-}
 
-
 {-# LANGUAGE NoMonomorphismRestriction #-} 
+
 
 module NoCompilePush where
 
@@ -268,12 +268,15 @@ myVec = V.fromList [0..9]
 usePrg :: (Enum b, Num b, PrimMonad m) => PushT m b
 usePrg = map (+1) (use myVec 10 )
 
+runUse :: IO (V.Vector Int)
 runUse = toVector (usePrg :: PushT IO Int) 
 
 
 -- zipP test
+prg :: (Enum a, Enum b, Num a, Num b, PrimMonad m) => PushT m (a, b)
 prg = zipP (use myVec 10) (use myVec 10)
 
+runPrg :: IO (V.Vector (Int, Int))
 runPrg = toVector (prg :: PushT IO (Int,Int))
 -- Running this requires a Use case in index_
 -- which requires index_ to be monadic
@@ -322,6 +325,29 @@ index_ (Interleave p1 p2) ix =
   if (ix `mod` 2 == 0)
   then index_ p1 (ix `div` 2)
   else index_ p2 (ix `div` 2) 
+
+
+-- indexM_ :: Monad m => PushT m a -> Ix -> m a
+-- indexM_ (Map p f) ix = liftM f (indexM_ p ix)
+-- indexM_ (Generate ixf n) ix = return $ ixf ix
+-- indexM_ (IMap p f) ix = liftM2 f (indexM_ p ix) ix
+-- indexM_ (Iterate f a l) ix = P.iterate f a P.!! ix 
+-- --index_ (Iterate f a l) ix =
+-- --  do sum <- newRef a
+-- --     forM_ [0..ix-1] $ \i -> 
+-- --       do val <- readRef sum
+-- --          writeRef sum (f val)
+-- --     readRef sum
+-- indexM_ (Append l p1 p2) ix =
+--   if (ix < l)
+--   then indexM_ p1 ix
+--   else indexM_ p2 (ix - l)
+-- indexM_ (Interleave p1 p2) ix =
+--   if (ix `mod` 2 == 0)
+--   then indexM_ p1 (ix `div` 2)
+--   else indexM_ p2 (ix `div` 2) 
+
+
 
 
 ---------------------------------------------------------------------------
