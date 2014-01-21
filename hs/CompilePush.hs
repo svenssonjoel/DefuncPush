@@ -104,12 +104,25 @@ data PushT b  where
   Append :: Expable b => Length -> PushT b -> PushT b -> PushT b
 
   Select :: Expr Bool -> PushT b -> PushT b -> PushT b
+  -- pushLength on Select, requires evaluation of an Expr.
 
+--data Push a = Push (PushT a) Length
 
-data Push a = Push (PushT a) Length
+-- len (Push _ l) =  l 
 
-len (Push _ l) =  l 
+-- now PushT can be used as the array type (without any Push Wrapper) 
+pushLength :: PushT m b -> Length
+pushLength (Generate _ l) = l
+pushLength (Use _ l) = l
+pushLength (Force _ l) = l
+pushLength (Iterate _ _ l) = l
+pushLength (Map p _ )  = pushLength p
+pushLength (IxMap p _) = pushLength p
+pushLength (IMap p _)  = pushLength p
+pushLength (Append _ p1 p2) = pushLength p1 + pushLength p2
+--pushLength (Interleave p1 p2) = 2 * (min (pushLength p1) (pushLength p2))
 
+len = pushLength 
 ---------------------------------------------------------------------------
 -- Apply
 ---------------------------------------------------------------------------
@@ -332,8 +345,6 @@ monadic1 arr =
 ---------------------------------------------------------------------------
 -- Things that are hard to do with Push or Pull Arrays, but now "simple"
 ---------------------------------------------------------------------------
---divConc :: PushT m ix a -> (PushT m ix a -> PushT m ix a -> PushT m ix b) -> PushT m ix b
---divConc (Generate ixf n) f | n > 1 = divConc (Generate ixf (n `div` 2))
 
 -- Transform a program that computes a Push array
 -- to a program that computes a single element.
@@ -375,21 +386,26 @@ indexP (Append l p1 p2) ix = do
   readRef_ r
 
 
-takeSome :: Expable a => Push a -> Length -> Push a
-takeSome (Push p l) m = Push (takeSome' p m) m
 
-takeSome' :: Expable a => PushT a -> Length -> PushT a 
-takeSome' (Map p f) m = Map (takeSome' p m) f 
-takeSome' (Generate ixf n) m = Generate ixf m --conditionals !
-takeSome' (Use mem l) m = Use mem m -- conditionals !
-takeSome' (IMap p f) m = IMap (takeSome' p m) f
-takeSome' (Force p l) m = Force (takeSome' p m) m -- conditionals !
-takeSome' (IxMap p f) m = IxMap (takeSome' p m) f
-takeSome' (Iterate f a l) m = Iterate f a m -- conditionals !
-takeSome' (Append l p1 p2) m =  
-  Select (m <=* l)
-         (takeSome' p1 m)
-         (Append l (takeSome' p1 m) (takeSome' p2 (m-l)))
+-- takesome requires some kind of conditional push array.  
+-- Select.
+--  
+  
+-- takeSome :: Expable a => Push a -> Length -> Push a
+-- takeSome (Push p l) m = Push (takeSome' p m) m
+
+-- takeSome' :: Expable a => PushT a -> Length -> PushT a 
+-- takeSome' (Map p f) m = Map (takeSome' p m) f 
+-- takeSome' (Generate ixf n) m = Generate ixf m --conditionals !
+-- takeSome' (Use mem l) m = Use mem m -- conditionals !
+-- takeSome' (IMap p f) m = IMap (takeSome' p m) f
+-- takeSome' (Force p l) m = Force (takeSome' p m) m -- conditionals !
+-- takeSome' (IxMap p f) m = IxMap (takeSome' p m) f
+-- takeSome' (Iterate f a l) m = Iterate f a m -- conditionals !
+-- takeSome' (Append l p1 p2) m =  
+--   Select (m <=* l)
+--          (takeSome' p1 m)
+--          (Append l (takeSome' p1 m) (takeSome' p2 (m-l)))
 
 
 
