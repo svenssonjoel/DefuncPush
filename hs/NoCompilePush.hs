@@ -70,15 +70,16 @@ instance PullFrom Pull where
 -- Write Function language
 ---------------------------------------------------------------------------
 data Write m a where
-  MapW :: Write m b -> (a -> b) -> Write m a
+  MapW :: (a -> b) -> Write m b -> Write m a
   ApplyW :: (Ix -> a -> m ()) -> Write m a
   VectorW :: PrimMonad m => M.MVector (PrimState m) a -> Write m a
 
-  IMapW :: Write m b -> (a -> Ix -> b) -> Write m a
+  IMapW :: (Ix -> a -> b) -> Write m b -> Write m a
+--   IMapMW :: Monad m => Write m b -> (a -> Ix -> m b) -> Write m a
 
-  IxMapW :: Write m a -> (Ix -> Ix) -> Write m a
+ --ixMapW :: Write m a -> (Ix -> Ix) -> Write m a
 
-  AppendW :: Write m a -> Ix -> Write m a
+  AppendW :: Ix -> Write m a -> Write m a
 
   -- replace by arith ? 
   EvensW :: Write m a -> Write m a
@@ -93,14 +94,17 @@ data Write m a where
 ---------------------------------------------------------------------------
   
 applyW :: Write m a -> (Ix -> a -> m ())
-applyW (MapW k f) =  \i a -> applyW k i (f a)
+applyW (MapW f k) =  \i a -> applyW k i (f a)
 applyW (ApplyW k) = k
 applyW (VectorW v) = \i a -> M.write v i a
 
-applyW (IMapW k f) = \i a -> applyW k i (f a i)
-applyW (IxMapW k f) = \i a -> applyW k (f i) a
+applyW (IMapW f k) = \i a -> applyW k i (f i a)
+-- applyW (IMapMW k f) = \i a -> do a' <- f a i
+--                                  applyW k i a'
 
-applyW (AppendW k l) = \i a -> applyW k (l + i) a
+--applyW (IxMapW k f) = \i a -> applyW k (f i) a
+
+applyW (AppendW l k) = \i a -> applyW k (l + i) a
 applyW (EvensW k) = \i a -> applyW k (2*i) a
 applyW (OddsW k)  = \i a -> applyW k (2*i+1) a 
 
@@ -111,19 +115,21 @@ applyW (RotateW l n k) = \i a -> applyW k ((i + n) `mod` l) a
 -- Push Language
 ---------------------------------------------------------------------------
 data PushT m b  where
-  Map  :: PushT m a -> (a -> b) -> PushT m b
+  Map  :: (a -> b) -> PushT m a -> PushT m b
 
   -- array creation 
-  Generate :: Monad m => (Ix -> b) -> Length -> PushT m b
-  GenerateM :: Monad m => (Ix -> m b) -> Length -> PushT m b
+  Generate :: Monad m =>  Length -> (Ix -> b) ->PushT m b
+--  GenerateM :: Monad m => Length -> (Ix -> m b) -> PushT m b
   
-  Use :: (PrimMonad m) => V.Vector b -> Length -> PushT m b 
+  Use :: (PrimMonad m) => Length ->  V.Vector b -> PushT m b 
 
-  Force :: PrimMonad m => PushT m b -> Length -> PushT m b 
+  Force :: PrimMonad m => Length ->  PushT m b -> PushT m b 
 
 --  IxMap :: PushT m b -> (Ix -> Ix) -> PushT m b
-  IMap :: PushT m a -> (a -> Ix -> b) -> PushT m b
-  Iterate :: RefMonad m r => (b -> b) -> b -> Length -> PushT m b 
+  IMap :: (Ix -> a -> b) -> PushT m a -> PushT m b
+--   IMapM :: Monad m => PushT m a -> (a -> Ix -> m b) -> PushT m b -- This is getting ugly
+  
+  Iterate :: RefMonad m r => Length ->  (b -> b) -> b -> PushT m b 
 
   Append :: Monad m => Ix -> PushT m b -> PushT m b -> PushT m b
 
@@ -135,14 +141,15 @@ data PushT m b  where
   
 -- now PushT can be used as the array type (without any Push Wrapper) 
 pushLength :: PushT m b -> Length
-pushLength (Generate _ l) = l
-pushLength (GenerateM _ l) = l
-pushLength (Use _ l) = l
-pushLength (Force _ l) = l
-pushLength (Iterate _ _ l) = l
-pushLength (Map p _ )  = pushLength p
+pushLength (Generate l _) = l
+-- pushLength (GenerateM l _) = l
+pushLength (Use l _) = l
+pushLength (Force l _) = l
+pushLength (Iterate l _ _) = l
+pushLength (Map _ p )  = pushLength p
 --pushLength (IxMap p _) = pushLength p
-pushLength (IMap p _)  = pushLength p
+pushLength (IMap _ p)  = pushLength p
+-- pushLength (IMapM _ p) = pushLength p 
 pushLength (Append _ p1 p2) = pushLength p1 + pushLength p2
 pushLength (Interleave p1 p2) = 2 * (min (pushLength p1) (pushLength p2))
 
@@ -157,40 +164,41 @@ len = pushLength
 ---------------------------------------------------------------------------
   
 apply :: PushT m b -> (Write m b -> m ())
-apply (Map p f) = \k -> apply p (MapW k f)
-apply (Generate ixf n) = \k -> forM_ [0..(fromIntegral n-1)] $ \i ->
+apply (Map f p) = \k -> apply p (MapW f k)
+apply (Generate n ixf) = \k -> forM_ [0..(n-1)] $ \i ->
                            applyW k i (ixf i)
-apply (GenerateM ixf n) = \k -> forM_ [0..(fromIntegral n-1)] $ \i ->
-                           do a <- ixf i       
-                              applyW k i a
+-- apply (GenerateM n ixf) = \k -> forM_ [0..(n-1)] $ \i ->
+--                            do a <- ixf i       
+--                               applyW k i a
 
-apply (Use mem l) = \k -> forM_ [0..(fromIntegral l-1)] $ \i ->
+apply (Use l mem) = \k -> forM_ [0..(l-1)] $ \i ->
                                applyW k i (mem V.! i)  
 
 
-apply (IMap p f) = \k -> apply p (IMapW k f)
+apply (IMap f p) = \k -> apply p (IMapW f k)
+--apply (IMapM p f) = \k -> apply p (IMapMW k f)
 
 --apply (IxMap p f) = \k -> apply p (IxMapW k f) 
 
 apply (Append l p1 p2) = \k -> apply p1 k >>
-                               apply p2 (AppendW k l)
+                               apply p2 (AppendW l k)
 
 apply (Interleave p1 p2) = \k -> apply p1 (EvensW k) >> 
                                  apply p2 (OddsW k) 
   
 
 
-apply (Iterate f a n) = \k ->
+apply (Iterate n f a) = \k ->
   do
     sum <- newRef a 
-    forM_ [0..(fromIntegral n-1)] $ \i ->
+    forM_ [0..(n-1)] $ \i ->
       do
         val <- readRef sum
         applyW k i val 
         writeRef sum (f val) 
 
 
-apply (Force p l) =
+apply (Force l p) =
   \k -> do arr <- M.new l 
            apply p  (VectorW arr)
            imm <- V.freeze arr
@@ -210,7 +218,7 @@ apply (Rotate n p) =
 (<:) :: PushT m a -> (Ix -> a -> m ()) -> m () 
 p <: k = apply p (ApplyW k)
 
-use :: PrimMonad m => V.Vector a -> Length -> PushT m a
+use :: PrimMonad m => Length -> V.Vector a -> PushT m a
 use mem l = Use mem l
 -- undefunctionalized
 -- use :: PrimMonad m => V.Vector a -> Length -> Push m a
@@ -221,10 +229,13 @@ use mem l = Use mem l
 
 
 map :: (a -> b) -> PushT m a -> PushT m b
-map f p= Map p f
+map f p= Map f p
 
-imap :: (a -> Ix -> b) -> PushT m a -> PushT m b
-imap f p = IMap p f
+imap :: (Ix -> a -> b) -> PushT m a -> PushT m b
+imap f p = IMap f p
+
+--imapM :: Monad m => (a -> Ix -> m b) -> PushT m a -> PushT m b
+--imapM f p = IMapM p f 
 
 --ixmap :: (Ix -> Ix) -> PushT m a -> PushT m a
 --ixmap f p = IxMap p f
@@ -233,7 +244,7 @@ imap f p = IMap p f
 p1 ++ p2 = Append (len p1) p1 p2  
 
 iterate :: RefMonad m r => Length -> (a -> a) -> a -> PushT m a
-iterate n f a = Iterate f a n
+iterate n f a = Iterate n f a
 
 interleave :: Monad m => PushT m a -> PushT m a -> PushT m a
 interleave p1 p2 = Interleave p1 p2 
@@ -251,7 +262,7 @@ rotate n p = Rotate n p
 ---------------------------------------------------------------------------
 
 push (Pull ixf n) =
-  Generate ixf n
+  Generate n ixf
 
 class ToPush m arr where
   toPush ::  arr a -> PushT m a
@@ -259,17 +270,17 @@ class ToPush m arr where
 instance Monad m => ToPush m (PushT m) where
   toPush = id
 
-pushM :: Monad m => Pull (m a) -> PushT m a 
-pushM (Pull ixf n) = GenerateM ixf n 
+-- pushM :: Monad m => Pull (m a) -> PushT m a 
+-- pushM (Pull ixf n) = GenerateM n ixf 
 
 
--- Not so fun... 
-pushM2 :: Monad m => Pull (m a, m b) -> PushT m (a,b) 
-pushM2 (Pull ixf n) = GenerateM (c . ixf) n
-  where
-    c (a,b) = do a' <- a
-                 b' <- b
-                 return (a', b') 
+-- -- Not so fun... 
+-- pushM2 :: Monad m => Pull (m a, m b) -> PushT m (a,b) 
+-- pushM2 (Pull ixf n) = GenerateM n (c . ixf)
+--   where
+--     c (a,b) = do a' <- a
+--                  b' <- b
+--                  return (a', b') 
 
 
 ---------------------------------------------------------------------------
@@ -291,17 +302,18 @@ toVector = freeze
 ---------------------------------------------------------------------------
      
 force :: PrimMonad m => PushT m a -> PushT m a
-force p = Force p (len p) 
+force p = Force (len p) p
 
 ---------------------------------------------------------------------------
 -- Experiments Push a -> Pull a
 ---------------------------------------------------------------------------
 
 index_ :: PushT m a -> Ix -> a
-index_ (Map p f) ix = f (index_ p ix)
-index_ (Generate ixf n) ix = ixf ix
-index_ (IMap p f) ix = f (index_ p ix) ix
-index_ (Iterate f a l) ix = P.iterate f a P.!! ix 
+index_ (Map f p) ix = f (index_ p ix)
+index_ (Use l v) ix = v V.! ix  
+index_ (Generate n ixf) ix = ixf ix
+index_ (IMap f p) ix = f ix (index_ p ix)
+index_ (Iterate l f a) ix = P.iterate f a P.!! ix 
 --index_ (Iterate f a l) ix =
 --  do sum <- newRef a
 --     forM_ [0..ix-1] $ \i -> 
@@ -321,24 +333,24 @@ index_ (Reverse p) ix = index_ p (len p - 1 - ix)
 index_ (Rotate dist p) ix = index_ p ((ix - dist) `mod` (len p)) 
 
 
-indexM_ :: Monad m => PushT m a -> Ix -> m a
-indexM_ (Map p f) ix = liftM f (indexM_ p ix)
-indexM_ (Use v l) ix = return $ v V.! ix 
-indexM_ (Generate ixf n) ix = return $ ixf ix
-indexM_ (GenerateM ixf n) ix = ixf ix 
-indexM_ (IMap p f) ix = do a <- indexM_ p ix
-                           return $ f a ix
-indexM_ (Iterate f a l) ix = return $ P.iterate f a P.!! ix 
-indexM_ (Append l p1 p2) ix =
-  if (ix < l)
-  then indexM_ p1 ix
-  else indexM_ p2 (ix - l)
-indexM_ (Interleave p1 p2) ix =
-  if (ix `mod` 2 == 0)
-  then indexM_ p1 (ix `div` 2)
-  else indexM_ p2 (ix `div` 2) 
-indexM_ (Reverse p) ix = indexM_ p (len p - 1 - ix)
-indexM_ (Rotate dist p) ix = indexM_ p ((ix - dist) `mod` (len p)) 
+-- indexM_ :: Monad m => PushT m a -> Ix -> m a
+-- indexM_ (Map f p) ix = liftM f (indexM_ p ix)
+-- indexM_ (Use l v) ix = return $ v V.! ix 
+-- indexM_ (Generate n ixf) ix = return $ ixf ix
+-- indexM_ (GenerateM n ixf) ix = ixf ix 
+-- indexM_ (IMap f p) ix = do a <- indexM_ p ix
+--                            return $ f ix a
+-- indexM_ (Iterate l f a) ix = return $ P.iterate f a P.!! ix 
+-- indexM_ (Append l p1 p2) ix =
+--   if (ix < l)
+--   then indexM_ p1 ix
+--   else indexM_ p2 (ix - l)
+-- indexM_ (Interleave p1 p2) ix =
+--   if (ix `mod` 2 == 0)
+--   then indexM_ p1 (ix `div` 2)
+--   else indexM_ p2 (ix `div` 2) 
+-- indexM_ (Reverse p) ix = indexM_ p (len p - 1 - ix)
+-- indexM_ (Rotate dist p) ix = indexM_ p ((ix - dist) `mod` (len p)) 
 
 --index_ (Iterate f a l) ix =
 --  do sum <- newRef a
@@ -355,9 +367,6 @@ indexM_ (Rotate dist p) ix = indexM_ p ((ix - dist) `mod` (len p))
 convert :: PushT m a -> Pull a
 convert p = Pull (\ix -> index_ p ix) (len p) 
 
--- convertM should work with use (atleast the plan) 
-convertM :: Monad m =>  PushT m a -> Pull (m a)
-convertM p = Pull (\ix -> indexM_ p ix) (len p) 
 ---------------------------------------------------------------------------
 -- Functions from Pull array library
 ---------------------------------------------------------------------------
@@ -370,9 +379,6 @@ zipP p1 p2 = push $ zipPull (convert p1) (convert p2)
 -- converting pull to push is cheap.
 -- Converting a push to pull is potentially costly...
 -- But the convert function kind-of-cheats in the iterate case. 
-
-zipPM :: Monad m => PushT m a -> PushT m b -> PushT m (a,b)
-zipPM p1 p2 = pushM2 $ zipPull (convertM p1) (convertM p2) 
 
 
 head :: PushT m a -> a
@@ -400,7 +406,7 @@ runSimple1 = toVector (simple1 input1 :: PushT IO Int)
 myVec = V.fromList [0..9] 
 
 usePrg :: (Enum b, Num b, PrimMonad m) => PushT m b
-usePrg = rotate 3 $ reverse $ map (+1) (use myVec 10 )
+usePrg = rotate 3 $ reverse $ map (+1) (use 10 myVec )
 
 runUse :: IO (V.Vector Int)
 runUse = toVector (usePrg :: PushT IO Int) 
@@ -408,7 +414,7 @@ runUse = toVector (usePrg :: PushT IO Int)
 
 -- zipP test
 prg :: (Enum a, Enum b, Num a, Num b, PrimMonad m) => PushT m (a, b)
-prg = zipPM (use myVec 10) (use myVec 10)
+prg = zipP (use 10 myVec) (use 10 myVec)
 
 runPrg :: IO (V.Vector (Int, Int))
 runPrg = toVector (prg :: PushT IO (Int,Int))
@@ -435,3 +441,13 @@ runPrg = toVector (prg :: PushT IO (Int,Int))
 -- usePrg :: (Num a, Num ix, ctxt a, MemMonad ctxt mem ix a m, ForMonad ctxt ix m)
 --           => mem ix a -> PushT m ix a 
 -- 
+
+saxpy :: Float -> PushT m Float -> PushT m Float -> PushT m Float
+saxpy a x y = imap (\i xi -> (a * xi + index_ y i)) x 
+
+
+runSaxpy :: IO (V.Vector Float)
+runSaxpy = toVector $ saxpy 1.5 (use 10 x) (use 10 y)  
+   where
+     x = V.fromList [0..9] 
+     y = V.fromList (replicate 10 1)
