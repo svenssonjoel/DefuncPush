@@ -50,6 +50,12 @@ data Pull a = Pull (Ix -> a) Length
 zipPull :: Pull a -> Pull b -> Pull (a,b)
 zipPull (Pull p1 n1) (Pull p2 n2) = Pull (\i -> (p1 i, p2 i)) (min n1 n2) 
 
+takePull :: Length -> Pull a -> Pull a
+takePull n (Pull ixf l) = Pull ixf n
+
+dropPull :: Length -> Pull a -> Pull a
+dropPull n (Pull ixf l) = Pull (\i -> ixf (i+n)) (l - n)
+
 ---------------------------------------------------------------------------
 -- Convert to Pull array
 --------------------------------------------------------------------------- 
@@ -373,9 +379,8 @@ zipP p1 p2 = push $ zipPull (convert p1) (convert p2)
 head :: PushT m a -> a
 head p = index_ p 0 
 
+take :: Monad m => Length -> PushT m a -> PushT m a
+take n p = push (takePull n (convert p))
 
-
-
-
-
-
+drop :: Monad m => Length -> PushT m a -> PushT m a
+drop n p = push (dropPull n (convert p))
