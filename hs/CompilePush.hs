@@ -22,8 +22,8 @@ import Control.Monad.State
 import Data.RefMonad
 
 -- replaces the above
-import Data.Array.MArray hiding (freeze,Ix)
-import Data.Array.IO hiding (freeze,Ix)
+import Data.Array.MArray hiding (freeze,Ix,index)
+import Data.Array.IO hiding (freeze,Ix,index)
 import qualified Data.Array.IO as A 
 
 import Prelude hiding (reverse,scanl,map,read,(++))
@@ -48,6 +48,12 @@ data Pull a = Pull (Ix -> a) Length
 zipPull :: Pull a -> Pull b -> Pull (a,b)
 zipPull (Pull p1 n1) (Pull p2 n2) = Pull (\i -> (p1 i, p2 i)) (min_ n1 n2)
 
+takePull :: Length -> Pull a -> Pull a
+takePull n (Pull ixf l) = Pull ixf n
+
+dropPull :: Length -> Pull a -> Pull a
+dropPull n (Pull ixf l) = Pull (\i -> ixf (i+n)) (l - n)
+
 ---------------------------------------------------------------------------
 -- Convert to Pull array
 --------------------------------------------------------------------------- 
@@ -61,66 +67,87 @@ instance PullFrom Pull where
 -- Write Function language
 ---------------------------------------------------------------------------
 data Write a where
-  MapW :: Write b -> (a -> b) -> Write a
+  MapW ::  (a -> b) -> Write b -> Write a
   ApplyW :: (Ix -> a -> CompileMonad ()) -> Write a
   VectorW :: Expable a => CMMem a -> Write a
 
-  IMapW :: Write b -> (a -> Ix -> b) -> Write a
+  IMapW :: (Ix -> a -> b) -> Write b -> Write a
 
-  IxMapW :: Write a -> (Ix -> Ix) -> Write a
+--   IxMapW :: Write a -> (Ix -> Ix) -> Write a
 
-  AppendW :: Write a -> Length -> Write a
+  AppendW :: Length -> Write a -> Write a
+
+  EvensW :: Write a -> Write a
+  OddsW  :: Write a -> Write a
+
+  ReverseW :: Length -> Write a -> Write a
+  RotateW  :: Length -> Length -> Write a -> Write a
+  
   
 ---------------------------------------------------------------------------
 -- Apply Write 
 ---------------------------------------------------------------------------
   
 applyW :: Write a -> (Ix -> a -> CompileMonad ())
-applyW (MapW k f) =  \i a -> applyW k i (f a)
+applyW (MapW f k) =  \i a -> applyW k i (f a)
 applyW (ApplyW k) = k
 applyW (VectorW v) = \i a -> write v i a
 
-applyW (IMapW k f) = \i a -> applyW k i (f a i)
-applyW (IxMapW k f) = \i a -> applyW k (f i) a
+applyW (IMapW f k) = \i a -> applyW k i (f i a)
+-- applyW (IxMapW k f) = \i a -> applyW k (f i) a
 
-applyW (AppendW k l) = \i a -> applyW k (l + i) a
- 
+applyW (AppendW l k) = \i a -> applyW k (l + i) a
+
+applyW (EvensW k) = \i a -> applyW k (2*i) a
+applyW (OddsW k)  = \i a -> applyW k (2*i+1) a 
+
+applyW (ReverseW l k) = \i a -> applyW k (l - 1 - i) a
+applyW (RotateW l n k) = \i a -> applyW k ((i + n) `mod_` l) a
+
 ---------------------------------------------------------------------------
 -- Push Language
 ---------------------------------------------------------------------------
-data PushT b  where
-  Map  :: (Expable a) => PushT a -> (a -> b) -> PushT b
+data PushT b where
+  Map  :: (Expable a) => (a -> b) -> PushT a -> PushT b
 
   -- array creation 
-  Generate ::  Expable b => (Ix -> b) -> Length -> PushT b
-  Use :: Expable b => CMMem b -> Length -> PushT b 
+  Generate ::  Expable b => Length -> (Ix -> b) -> PushT b
+  Use :: Expable b => Length -> CMMem b -> PushT b 
 
-  Force :: Expable b =>  PushT b -> Length -> PushT b 
+  Force :: Expable b =>  Length -> PushT b -> PushT b 
 
-  IxMap :: Expable b => PushT b -> (Ix -> Ix) -> PushT b
-  IMap :: Expable a => PushT a -> (a -> Ix -> b) -> PushT b
-  Iterate :: Expable b => (b -> b) -> b -> Length -> PushT b 
+-- IxMap :: Expable b => PushT b -> (Ix -> Ix) -> PushT b
+  IMap :: Expable a => (Ix -> a -> b) -> PushT a -> PushT b
+  Iterate :: Expable b => Length -> (b -> b) -> b -> PushT b 
 
   Append :: Expable b => Length -> PushT b -> PushT b -> PushT b
 
-  Select :: Expr Bool -> PushT b -> PushT b -> PushT b
+--  Select :: Expr Bool -> PushT b -> PushT b -> PushT b
   -- pushLength on Select, requires evaluation of an Expr.
 
---data Push a = Push (PushT a) Length
+  Interleave :: PushT b -> PushT b -> PushT b  
 
--- len (Push _ l) =  l 
+  -- Permutations
+  Reverse :: PushT b -> PushT b
+  Rotate  :: Length -> PushT b -> PushT b 
+  
 
+  
 -- now PushT can be used as the array type (without any Push Wrapper) 
-pushLength :: PushT m b -> Length
-pushLength (Generate _ l) = l
-pushLength (Use _ l) = l
-pushLength (Force _ l) = l
-pushLength (Iterate _ _ l) = l
-pushLength (Map p _ )  = pushLength p
-pushLength (IxMap p _) = pushLength p
-pushLength (IMap p _)  = pushLength p
+pushLength :: PushT b -> Length
+pushLength (Generate l _) = l
+pushLength (Use l _) = l
+pushLength (Force l _) = l
+pushLength (Iterate l _ _ ) = l
+pushLength (Map _ p)  = pushLength p
+-- pushLength (IxMap p _) = pushLength p
+pushLength (IMap _ p)  = pushLength p
 pushLength (Append _ p1 p2) = pushLength p1 + pushLength p2
 --pushLength (Interleave p1 p2) = 2 * (min (pushLength p1) (pushLength p2))
+pushLength (Interleave p1 p2) = 2 * (min_ (pushLength p1) (pushLength p2))
+
+pushLength (Reverse p) = pushLength p
+pushLength (Rotate _ p) = pushLength p
 
 len = pushLength 
 ---------------------------------------------------------------------------
@@ -128,37 +155,41 @@ len = pushLength
 ---------------------------------------------------------------------------
   
 apply :: Expable b => PushT b -> (Write b -> CompileMonad ())
-apply (Map p f) = \k -> apply p (MapW k f)
+apply (Map f p) = \k -> apply p (MapW f k)
 
-apply (Generate ixf n) =
+apply (Generate n ixf) =
   \k -> do -- l <- n
            par_ n $ \i ->
              applyW k i (ixf i)
 
-apply (Use mem n) =
+apply (Use n mem) =
   \k -> do 
            par_ n $ \i ->
                             do a <- read mem i
                                applyW k i a 
 
 
-apply (IMap p f) = \k -> apply p (IMapW k f)
+apply (IMap f p) = \k -> apply p (IMapW f k)
 
-apply (IxMap p f) = \k -> apply p (IxMapW k f) 
+--apply (IxMap p f) = \k -> apply p (IxMapW k f) 
 
 apply (Append n p1 p2) =
   \k -> do -- l <- n
            apply p1 k 
-           apply p2 (AppendW k n)
+           apply p2 (AppendW n k)
+           
+apply (Interleave p1 p2) =
+  \k -> apply p1 (EvensW k) >> 
+        apply p2 (OddsW k) 
+  
+--apply (Select b p1 p2) = \k ->
+--  do
+--    (_,p1') <- localCode $ apply p1 k
+--    (_,p2') <- localCode $ apply p2 k
+--    -- b' <- b
+--    tell $ Cond (unE b) p1' p2' 
 
-apply (Select b p1 p2) = \k ->
-  do
-    (_,p1') <- localCode $ apply p1 k
-    (_,p2') <- localCode $ apply p2 k
-    -- b' <- b
-    tell $ Cond (unE b) p1' p2' 
-
-apply (Iterate f a n) = \k -> 
+apply (Iterate n f a) = \k -> 
   do
     -- l <- n
     sum <- newRef_ a 
@@ -170,14 +201,18 @@ apply (Iterate f a n) = \k ->
         writeRef_ sum (f val) 
 
 
-apply (Force p n) =
+apply (Force n p) =
   \k -> do -- l <- n
            arr <- allocate n
            apply p (VectorW arr)
            par_ n $ \ix ->
              do a <- read arr ix
                 applyW k ix a 
-        
+
+apply (Reverse p) =
+  \k -> apply p (ReverseW (len p) k)
+apply (Rotate n p) =
+  \k -> apply p (RotateW (len p) n k) 
 ---------------------------------------------------------------------------
 -- Basic functions on push arrays
 ---------------------------------------------------------------------------
@@ -185,8 +220,8 @@ apply (Force p n) =
 --(<:) :: Expable a => PushT a -> (Ix -> a -> CompileMonad ()) -> CompileMonad () 
 --p <: k = apply p (ApplyW k)
 
-use :: Expable a => CMMem a -> Length -> Push a
-use mem l = Push (Use mem l) l 
+use :: Expable a => Length -> CMMem a -> PushT a
+use l mem = Use l mem
 -- undefunctionalised 
 --  where
 --    p k =
@@ -195,61 +230,71 @@ use mem l = Push (Use mem l) l
 --        a <- read mem ix
 --        k ix a 
 
-map :: Expable a => (a -> b) -> Push a -> Push b
-map f (Push p l) = Push (Map p f) l 
+map :: Expable a => (a -> b) -> PushT a -> PushT b
+map f p = Map f p
 
-imap :: Expable a => (a -> Ix -> b) -> Push a -> Push b
-imap f (Push p l)  = Push (IMap p f) l 
+imap :: Expable a => (Ix -> a -> b) -> PushT a -> PushT b
+imap f p  = IMap f p 
 
-ixmap :: Expable a => (Ix -> Ix) -> Push a -> Push a
-ixmap f (Push p l) = Push (IxMap p f) l 
+-- ixmap :: Expable a => (Ix -> Ix) -> Push a -> Push a
+-- ixmap f (Push p l) = Push (IxMap p f) l 
 
 
-(++) :: Expable a => Push a -> Push a  -> Push a
-(Push p1 l1) ++ (Push p2 l2)  = Push (Append l1 p1 p2) (l1 + l2)
+(++) :: Expable a => PushT a -> PushT a -> PushT a
+p1 ++ p2 = Append l1 p1 p2
+  where
+    l1 = len p1
 
-reverse :: Expable a => Push a -> Push a
-reverse p = ixmap (\i -> (len p - 1 - i))  p
+--reverse :: Expable a => Push a -> Push a
+--reverse p = ixmap (\i -> (len p - 1 - i))  p
 
-iterate :: Expable a => Length -> (a -> a) -> a -> Push a
-iterate n f a = Push (Iterate f a n) n 
+iterate :: Expable a => Length -> (a -> a) -> a -> PushT a
+iterate n f a = Iterate n f a
 
+interleave :: Monad m => PushT a -> PushT a -> PushT a
+interleave p1 p2 = Interleave p1 p2 
+
+reverse :: PushT a -> PushT a
+reverse p = Reverse p 
+
+rotate :: Length -> PushT a -> PushT a
+rotate n p = Rotate n p 
 ---------------------------------------------------------------------------
 -- Conversion Pull Push (Clean this mess up)
 ---------------------------------------------------------------------------
 
 push (Pull ixf n) =
-  Push (Generate ixf n) n
+  Generate n ixf
 
 ---------------------------------------------------------------------------
 -- write to vector
 --------------------------------------------------------------------------- 
 
-freeze :: (Expable a) => Push a -> CompileMonad (CMMem a)
-freeze (Push p n)  =
+freeze :: (Expable a) => PushT a -> CompileMonad (CMMem a)
+freeze p  =
   do
-     arr <- allocate n 
+     arr <- allocate (len p)
      apply p (VectorW arr)
      return arr
 
-toVector :: Expable a => Push a -> CompileMonad (CMMem a)
+toVector :: Expable a => PushT a -> CompileMonad (CMMem a)
 toVector = freeze 
 
 ---------------------------------------------------------------------------
 -- A defunctionalisable "freeze", called force. 
 ---------------------------------------------------------------------------
      
-force :: Expable a => Push a -> Push a
-force (Push p l)  = Push (Force p l) l  
+force :: Expable a => PushT a -> PushT a
+force p = Force (len p) p 
 
 ---------------------------------------------------------------------------
 -- Conditional Push array ? 
 ---------------------------------------------------------------------------
-select :: Expr Bool -> Push a -> Push a -> Push a
+--select :: Expr Bool -> Push a -> Push a -> Push a
 --select b (Push p1 n1) (Push p2 n2)  =
 --  Push (\k -> if b then p1 k else p2 k) (if b then n1 else n2)
-select b (Push p1 l1) (Push p2 l2) =
-  Push (Select b p1 p2) (ifThenElse b l1 l2) -- undefined -- do n1 <- l1
+--select b (Push p1 l1) (Push p2 l2) =
+--  Push (Select b p1 p2) (ifThenElse b l1 l2) -- undefined -- do n1 <- l1
                             -- n2 <- l2
                             -- r <- newRef_ n1
                             -- b' <- b
@@ -262,86 +307,28 @@ select b (Push p1 l1) (Push p2 l2) =
 -- Simple programs
 ---------------------------------------------------------------------------
 
-input11 = Pull id 16
+-- input11 = Pull id 16
 
-simple1 :: (Expable a, Num a) => Pull a -> Push a
-simple1 = map (+1) . force . push 
+-- simple1 :: (Expable a, Num a) => Pull a -> PushT a
+-- simple1 = map (+1) . force . push 
 
-compileSimple1 = runCM 0 $ toVector ( simple1 input11 :: Push (Expr Int))
+-- compileSimple1 = runCM 0 $ toVector ( simple1 input11 :: PushT (Expr Int))
+-- -- runSimple1 = getElems =<< toVector (simple1 input11 :: PushT IO Int Int)
+
+-- --compileSimple1' = runCM 0 $ toVector $ takeSome (simple1 input11 :: PushT (Expr Int)) 10
+
+-- simple2 :: (Expable a, Num a) => Pull a -> PushT a
+-- simple2 arr = a1 ++ a2 
+--   where
+--     a1 = push arr
+--     a2 = push arr
+
+
+-- compileSimple2 = runCM 0 $ toVector ( simple2 input11 :: PushT (Expr Int))
 -- runSimple1 = getElems =<< toVector (simple1 input11 :: PushT IO Int Int)
 
---compileSimple1' = runCM 0 $ toVector $ takeSome (simple1 input11 :: PushT (Expr Int)) 10
-
-simple2 :: (Expable a, Num a) => Pull a -> Push a
-simple2 arr = a1 ++ a2 
-  where
-    a1 = push arr
-    a2 = push arr
-
-
-compileSimple2 = runCM 0 $ toVector ( simple2 input11 :: Push (Expr Int))
--- runSimple1 = getElems =<< toVector (simple1 input11 :: PushT IO Int Int)
-
-compileSimple2' = runCM 0 $ toVector $ takeSome (simple2 input11 :: Push (Expr Int)) (fromIntegral 10)
-
-{-
--- Simple2
-Allocate "v0" (E {unE = Literal (IntVal 16) :+: Literal (IntVal 16)}) :>>:
-  (Par "v1" (Literal (IntVal 16)) (Write "v0" (Var "v1") (Var "v1")) :>>:
-   Par "v2" (Literal (IntVal 16)) (Write "v0" (Literal (IntVal 16) :+: Var "v2") (Var "v2")))
-
---Simple2'
-Allocate "v0" (E {unE = Literal (IntVal 10)}) :>>:
-  Cond (LEq (Literal (IntVal 10)) (Literal (IntVal 16)))
-    (Par "v1" (Literal (IntVal 10))
-      (Write "v0" (Var "v1") (Var "v1")))
-    (Par "v1" (Literal (IntVal 10))
-       (Write "v0" (Var "v1") (Var "v1")) :>>:
-     Par "v2" (Literal (IntVal 10) :-: Literal (IntVal 16))
-       (Write "v0" (Literal (IntVal 16) :+: Var "v2") (Var "v2")))
--}
-
-{- 
-fusion  :: (Num a, Num ix, ForMonad ctxt ix m)
-         => Pull ix a -> PushT m ix a
-fusion = map (+1) . map (*2) . push 
-
-compileFusion = runCM 0 $ toVector ( fusion input11 :: PushT CompileMonad (Expr Int) (Expr Int))
-
-
-test11 :: (Num a, Num ix,
-           ctxt a, MemMonad ctxt mem ix a m,
-           ForMonad ctxt ix m)
-          => Pull ix a -> PushT m ix a
-test11 = map (+1) . force . map (+1) . push  
-
-compileTest11 = runCM 0 $ toVector (test11 input11 :: PushT CompileMonad (Expr Int) (Expr Int))
-runTest11 = toVector (test11 input11 :: PushT IO Int Int)
-
-runTest11' = do { s <- runTest11; (getElems s)}
-
-
-usePrg :: (Num a, Num ix, ctxt a, MemMonad ctxt mem ix a m, ForMonad ctxt ix m)
-          => mem ix a -> PushT m ix a 
-usePrg input = map (+1) (use input 10 )
-
-compileUsePrg = runCM 0 $ toVector ((usePrg  (CMMem "input1" 10)) :: PushT CompileMonad (Expr Int) (Expr Int))
-
--}
-
--- Maybe this program should be possible?
-
-{- 
-monadic1 :: (Num ix, ctxt a, ForMonad ctxt ix m, MemMonad ctxt mem ix ix m)
-            => Pull ix ix => m (PushT m ix ix) 
-monadic1 arr =
-  do mem <- freeze $ push arr
-     a   <- read mem 3 
-     let arr1 = Pull (\i -> i) a -- impossible
-     push arr1    
--} 
+--compileSimple2' = runCM 0 $ toVector $ takeSome (simple2 input11 :: PushT (Expr Int)) (fromIntegral 10)
   
-
 ---------------------------------------------------------------------------
 -- Things that are hard to do with Push or Pull Arrays, but now "simple"
 ---------------------------------------------------------------------------
@@ -349,23 +336,20 @@ monadic1 arr =
 -- Transform a program that computes a Push array
 -- to a program that computes a single element.
 
-index :: Expable a => Push a -> Ix -> CompileMonad a
-index (Push p n) ix = indexP p ix 
-  
-indexP :: Expable a => PushT a -> Ix -> CompileMonad a
-indexP (Map p f) ix        = liftM f (indexP p ix)
-indexP (Generate ixf n) ix = return $ ixf ix
+index :: Expable a => PushT a -> Ix -> CompileMonad a
+index (Map f p) ix        = liftM f (index p ix)
+index (Generate n ixf) ix = return $ ixf ix
 
-indexP (Use mem l) ix      = read mem ix
+index (Use l mem) ix      = return $ cmIndex mem ix -- read mem ix
 
-indexP (IMap p f)  ix      = liftM (\a -> f a ix) (indexP p ix)
+index (IMap f p)  ix      = liftM (\a -> f ix a) (index p ix)
 
-indexP (Force p l) ix      = indexP p ix
+index (Force l p) ix      = index p ix
 
 -- IxMap Implementation is wrong
-indexP (IxMap p f) ix      = indexP p (f ix)
+-- indexP (IxMap p f) ix      = indexP p (f ix)
 
-indexP (Iterate f a l) ix  =
+index (Iterate l f a) ix  =
   do sum <- newRef_ a
      -- ix' <- ix
      for_ ix $ \(i :: Expr Int) -> 
@@ -374,17 +358,36 @@ indexP (Iterate f a l) ix  =
      readRef_ sum
  
 -- need conditionals in language. 
-indexP (Append l p1 p2) ix = do
-  r <- mkRef_
-  -- ix' <- ix
-  -- l' <- l
-  cond (ix >* l)
-       (do a <- indexP p2 (ix - l)
-           writeRef_ r a)
-       (do a <- indexP p1 ix 
-           writeRef_ r a)
-  readRef_ r
+-- index (Append l p1 p2) ix = do
+--   r <- mkRef_
+--   -- ix' <- ix
+--   -- l' <- l
+--   cond (ix >* l)
+--        (do a <- index p2 (ix - l)
+--            writeRef_ r a)
+--        (do a <- index p1 ix 
+--            writeRef_ r a)
+--   readRef_ r
+index (Append l p1 p2) ix = do
+  a <- index p2 (ix - l)
+  b <- index p1 ix
+  return $ ifThenElse1 (ix >* l) a b 
 
+-- index (Interleave p1 p2) ix = do
+--   r <- mkRef_ 
+--   cond (ix `mod_` 2 ==* 0)
+--        (do a <- index p1 (ix `div_` 2)
+--            writeRef_ r a)
+--        (do a <- index p2 (ix `div_` 2)
+--            writeRef_ r a)
+--   readRef_ r 
+index (Interleave p1 p2) ix = do
+  a <- index p1 (ix `div_` 2)
+  b <- index p2 (ix `div_` 2)
+  return $ ifThenElse1 (ix `mod_` 2 ==* 0) a b
+
+index (Reverse p) ix = index p (len p - 1 - ix)
+index (Rotate dist p) ix = index p ((ix - dist) `mod_` (len p)) 
 
 
 -- takesome requires some kind of conditional push array.  
@@ -417,7 +420,8 @@ indexP (Append l p1 p2) ix = do
 type Id = String
 
 data Type = Int 
-          | Float 
+          | Float
+          | Bool
             deriving Show
                      
 data Code = Skip
@@ -442,9 +446,13 @@ data Value = IntVal Int
 
 data Exp = Var Id
          | Literal Value
+         | Index String Exp 
          | Exp :+: Exp
          | Exp :-: Exp
          | Exp :*: Exp
+         | Mod Exp Exp
+         | Div Exp Exp
+         | Eq  Exp Exp 
          | Gt  Exp Exp
          | LEq Exp Exp 
          | Min Exp Exp
@@ -457,6 +465,23 @@ data Expr a = E {unE :: Exp}
 
 ifThenElse :: Expr Bool -> Expr a -> Expr a -> Expr a
 ifThenElse b e1 e2 = E $ IfThenElse (unE b) (unE e1) (unE e2) 
+
+ifThenElse1 :: Expable a =>  Expr Bool -> a -> a -> a
+ifThenElse1 b e1 e2 = fromExp $ IfThenElse (unE b) (toExp e1) (toExp e2) 
+
+cmIndex :: Expable a => CMMem a -> Ix -> a
+cmIndex (CMMem nom n) ix = fromExp $ Index nom (toExp ix)
+
+mod_ :: Expr Int -> Expr Int -> Expr Int
+mod_ = inj2 Mod
+
+div_ :: Expr Int -> Expr Int -> Expr Int
+div_ = inj2 Div
+--minE :: Expr Int -> Expr Int -> Expr Int
+--minE = inj2 Min
+
+(==*) :: Expr a -> Expr a -> Expr Bool
+(==*) = inj2 Eq 
 
 (>*) :: Expr a -> Expr a -> Expr Bool
 (>*) = inj2 Gt
@@ -561,6 +586,11 @@ class Expable a where
   fromExp :: Exp -> a
   typeOf :: a -> Type 
 
+instance Expable (Expr Bool) where
+  toExp = unE
+  fromExp = inj
+  typeOf _ = Bool
+
 instance Expable (Expr Int) where
   toExp = unE 
   fromExp = inj 
@@ -570,4 +600,51 @@ instance Expable (Expr Float) where
   toExp = unE 
   fromExp = inj 
   typeOf _ = Float
+
+
+
+
+
+
+
+
+
+
+
+---------------------------------------------------------------------------
+-- Simple programs
+---------------------------------------------------------------------------
+
+input1 = Pull id 16
+
+simple1 :: (Expable a, Num a) => Pull a -> PushT a
+simple1 = map (+1) . force . push 
+
+compileSimple1 = runCM 0 $ toVector ( simple1 input1 :: PushT (Expr Int))
+
+
+
+-- Example without pull arrays entirely
+myVec = CMMem "inputArray"  10 
+
+usePrg :: (Expable b,  Num b) => PushT b
+usePrg = rotate 3 $ reverse $ map (+1) (use 10 myVec )
+
+compileUse = runCM 0 $ toVector (usePrg :: PushT (Expr Int))
+
+--runUse :: IO (V.Vector Int)
+--runUse = toVector (usePrg :: PushT IO Int) 
+
+
+-- -- zipP test
+-- prg :: (Enum a, Enum b, Num a, Num b, PrimMonad m) => PushT m (a, b)
+-- prg = zipP (use 10 myVec) (use 10 myVec)
+
+-- runPrg :: IO (V.Vector (Int, Int))
+-- runPrg = toVector (prg :: PushT IO (Int,Int))
+
+
+
+
+
 
