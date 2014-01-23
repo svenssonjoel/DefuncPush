@@ -336,6 +336,8 @@ force p = Force (len p) p
 -- Transform a program that computes a Push array
 -- to a program that computes a single element.
 
+-- TODO: Remove iterate from the language.
+
 index :: Expable a => PushT a -> Ix -> CompileMonad a
 index (Map f p) ix        = liftM f (index p ix)
 index (Generate n ixf) ix = return $ ixf ix
