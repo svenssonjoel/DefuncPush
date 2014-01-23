@@ -121,7 +121,7 @@ shuffle nb (Push p n) =
 unShuffle :: Int -> Push m a -> Push m a
 unShuffle nb (Push p n) =
   Push (\k -> p (\i a -> k (bitROL nb i) a)) n 
-              
+  
 
 iterate :: Monad m => Length -> (a -> a) -> a -> Push m a
 iterate n f a = Push (\k ->
