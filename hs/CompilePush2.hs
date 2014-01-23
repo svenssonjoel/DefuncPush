@@ -66,43 +66,43 @@ instance PullFrom Pull where
 ---------------------------------------------------------------------------
 -- Write Function language
 ---------------------------------------------------------------------------
-data Write a where
-  MapW ::  (a -> b) -> Write b -> Write a
-  ApplyW :: (Ix -> a -> CompileMonad ()) -> Write a
-  VectorW :: Expable a => CMMem a -> Write a
+-- data Write a where
+--   MapW ::  (a -> b) -> Write b -> Write a
+--   ApplyW :: (Ix -> a -> CompileMonad ()) -> Write a
+--   VectorW :: Expable a => CMMem a -> Write a
 
-  IMapW :: (Ix -> a -> b) -> Write b -> Write a
+--   IMapW :: (Ix -> a -> b) -> Write b -> Write a
 
---   IxMapW :: Write a -> (Ix -> Ix) -> Write a
+-- --   IxMapW :: Write a -> (Ix -> Ix) -> Write a
 
-  AppendW :: Length -> Write a -> Write a
+--   AppendW :: Length -> Write a -> Write a
 
-  EvensW :: Write a -> Write a
-  OddsW  :: Write a -> Write a
+--   EvensW :: Write a -> Write a
+--   OddsW  :: Write a -> Write a
 
-  ReverseW :: Length -> Write a -> Write a
-  RotateW  :: Length -> Length -> Write a -> Write a
+--   ReverseW :: Length -> Write a -> Write a
+--   RotateW  :: Length -> Length -> Write a -> Write a
   
   
 ---------------------------------------------------------------------------
 -- Apply Write 
 ---------------------------------------------------------------------------
   
-applyW :: Write a -> (Ix -> a -> CompileMonad ())
-applyW (MapW f k) =  \i a -> applyW k i (f a)
-applyW (ApplyW k) = k
-applyW (VectorW v) = \i a -> write v i a
+-- applyW :: Write a -> (Ix -> a -> CompileMonad ())
+-- applyW (MapW f k) =  \i a -> applyW k i (f a)
+-- applyW (ApplyW k) = k
+-- applyW (VectorW v) = \i a -> write v i a
 
-applyW (IMapW f k) = \i a -> applyW k i (f i a)
--- applyW (IxMapW k f) = \i a -> applyW k (f i) a
+-- applyW (IMapW f k) = \i a -> applyW k i (f i a)
+-- -- applyW (IxMapW k f) = \i a -> applyW k (f i) a
 
-applyW (AppendW l k) = \i a -> applyW k (l + i) a
+-- applyW (AppendW l k) = \i a -> applyW k (l + i) a
 
-applyW (EvensW k) = \i a -> applyW k (2*i) a
-applyW (OddsW k)  = \i a -> applyW k (2*i+1) a 
+-- applyW (EvensW k) = \i a -> applyW k (2*i) a
+-- applyW (OddsW k)  = \i a -> applyW k (2*i+1) a 
 
-applyW (ReverseW l k) = \i a -> applyW k (l - 1 - i) a
-applyW (RotateW l n k) = \i a -> applyW k ((i + n) `mod_` l) a
+-- applyW (ReverseW l k) = \i a -> applyW k (l - 1 - i) a
+-- applyW (RotateW l n k) = \i a -> applyW k ((i + n) `mod_` l) a
 
 ---------------------------------------------------------------------------
 -- Push Language
@@ -154,33 +154,33 @@ len = pushLength
 -- Apply
 ---------------------------------------------------------------------------
   
-apply :: Expable b => PushT b -> (Write b -> CompileMonad ())
-apply (Map f p) = \k -> apply p (MapW f k)
+apply :: Expable b => PushT b -> ((Ix -> b -> CompileMonad ()) -> CompileMonad ())
+apply (Map f p) = \k -> apply p (\i a -> k i (f a)) 
 
 apply (Generate n ixf) =
   \k -> do -- l <- n
            par_ n $ \i ->
-             applyW k i (ixf i)
+             k i (ixf i)
 
 apply (Use n mem) =
   \k -> do 
            par_ n $ \i ->
-                            do a <- read mem i
-                               applyW k i a 
+             do a <- read mem i
+                k i a 
 
 
-apply (IMap f p) = \k -> apply p (IMapW f k)
+apply (IMap f p) = \k -> apply p (\i a -> k i (f i a))
 
 --apply (IxMap p f) = \k -> apply p (IxMapW k f) 
 
 apply (Append n p1 p2) =
   \k -> do -- l <- n
            apply p1 k 
-           apply p2 (AppendW n k)
+           apply p2 (\i a -> k (n + i) a) 
            
 apply (Interleave p1 p2) =
-  \k -> apply p1 (EvensW k) >> 
-        apply p2 (OddsW k) 
+  \k -> apply p1 (\i a -> k (2*i) a) >> 
+        apply p2 (\i a -> k (2*i+1) a)  
   
 --apply (Select b p1 p2) = \k ->
 --  do
@@ -204,15 +204,15 @@ apply (Interleave p1 p2) =
 apply (Force n p) =
   \k -> do -- l <- n
            arr <- allocate n
-           apply p (VectorW arr)
+           apply p (\i a -> write arr i a) -- VectorW arr)
            par_ n $ \ix ->
              do a <- read arr ix
-                applyW k ix a 
+                k ix a 
 
 apply (Reverse p) =
-  \k -> apply p (ReverseW (len p) k)
+  \k -> apply p (\i a -> k ((len p) - 1 - i) a) -- ReverseW (len p) k)
 apply (Rotate n p) =
-  \k -> apply p (RotateW (len p) n k) 
+  \k -> apply p (\i a -> k ((i+n) `mod_` (len p)) a) -- RotateW (len p) n k) 
 ---------------------------------------------------------------------------
 -- Basic functions on push arrays
 ---------------------------------------------------------------------------
@@ -274,7 +274,7 @@ freeze :: (Expable a) => PushT a -> CompileMonad (CMMem a)
 freeze p  =
   do
      arr <- allocate (len p)
-     apply p (VectorW arr)
+     apply p (\i a -> write arr i a)  
      return arr
 
 toVector :: Expable a => PushT a -> CompileMonad (CMMem a)
