@@ -476,7 +476,7 @@ div_ = inj2 Div
 --minE = inj2 Min
 
 (==*) :: Expr a -> Expr a -> Expr Bool
-(==*) = inj2 Eq 
+         (==*) = inj2 Eq 
 
 (>*) :: Expr a -> Expr a -> Expr Bool
 (>*) = inj2 Gt
