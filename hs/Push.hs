@@ -18,7 +18,9 @@ import qualified Data.Vector.Mutable as M
 
 import Prelude hiding (reverse,zip,concat,map,scanl,replicate,repeat ) 
 
-import qualified Prelude as P 
+import qualified Prelude as P
+
+import Data.Bits
 ---------------------------------------------------------------------------
 
 type Index = Int
@@ -93,7 +95,33 @@ rev :: Push m a -> Push m a
 rev (Push p n) = Push (\k -> p (\i a -> k (n - 1 - i) a)) n
 
 rotate :: Int -> Push m a -> Push m a
-rotate dist (Push p n) = Push (\k -> p (\i a -> k ((i +  dist) `mod` n) a)) n 
+rotate dist (Push p n) = Push (\k -> p (\i a -> k ((i +  dist) `mod` n) a)) n
+
+bitROR :: Int -> Int -> Int 
+bitROR n i = i'
+  where bzero = (1 .&. i) `shiftL` (n-1)  
+        mask = 2^n-1
+        mask' = complement mask
+        masked_out = i .&. mask'
+        i' = (((i .&. mask) `shiftR` 1) .|. bzero) .|. masked_out
+
+bitROL :: Int -> Int -> Int 
+bitROL n i = i'
+   where bn = (bit (n-1)  .&. i) `shiftR` (n-1)
+         mask = 2^n-1
+         mask' = complement mask
+         masked_out = i .&. mask'
+         i' = (((i `shiftL` 1) .&. mask) .|. bn) .|. masked_out
+
+-- Only for power of two lengths! 
+shuffle :: Int -> Push m a -> Push m a
+shuffle nb (Push p n) =
+  Push (\k -> p (\i a -> k (bitROR nb i) a)) n
+
+unShuffle :: Int -> Push m a -> Push m a
+unShuffle nb (Push p n) =
+  Push (\k -> p (\i a -> k (bitROL nb i) a)) n 
+              
 
 iterate :: Monad m => Length -> (a -> a) -> a -> Push m a
 iterate n f a = Push (\k ->
