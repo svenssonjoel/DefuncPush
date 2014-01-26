@@ -117,7 +117,7 @@ len = pushLength
 -- Apply
 ---------------------------------------------------------------------------
 
-apply :: PushT m a -> ((Ix -> a -> m ()) -> m ())
+apply :: PushT m a -> (Ix -> a -> m ()) -> m ()
 apply (Map f p) = \k -> apply p (\i a -> k i (f a))
 
 apply (Generate n ixf) = \k -> forM_ [0..(n-1)] $ \i ->

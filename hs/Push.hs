@@ -66,7 +66,8 @@ len (Push _ n) = n
 (<:) :: Push m a -> (Index -> a -> m ()) -> m () 
 (Push p _) <: k = p k 
 
-use :: PrimMonad m => V.Vector a -> Length -> Push m a
+-- use :: PrimMonad m => V.Vector a -> Length -> Push m a
+use :: Monad m => V.Vector a -> Length -> Push m a
 use mem l = Push p l
   where
     p k = forM_ [0..l-1] $ \ix ->
@@ -137,19 +138,26 @@ unpair (Pull ixf n) =
            k (i*2) (fst (ixf i)) >>
            k (i*2+1) (snd (ixf i))) (2*n)
   
-unpairP :: Monad m => Push m (a,a) -> Push m a
-unpairP (Push p n) =
-  Push p' (2*n)
-  where p' =
-          \k ->
-          let k' i (a,b) = k (i*2) a >> k (i*2+1) b
-          in p k'  
+--unpairP :: Monad m => Push m (a,a) -> Push m a
+--unpairP (Push p n) =
+--  Push p' (2*n)
+--  where p' =
+--          \k ->
+--          let k' i (a,b) = k (i*2) a >> k (i*2+1) b
+--          in p k'  
           
 interleave :: Monad m => Push m a -> Push m a -> Push m a
 interleave (Push p m) (Push q n) = Push r (2 * (min m n))
   where r k = do p (\i a -> k (2*i) a)
                  q (\i a -> k (2*i+1) a)
 
+
+
+unpairP :: Monad m =>  Push m (a,a) -> Push m a
+unpairP (Push p m) = Push p' (2*m) 
+  where
+    p' k = p (\i (a,b) -> k (2*i) a >>
+                          k (2*i+1) a) 
 
 ---------------------------------------------------------------------------
 -- Zip (added a special zip)
@@ -176,6 +184,7 @@ repeat p = p >>= (\a -> replicate a a)
 
 replicate :: (RefMonad m r, PrimMonad m) => Int -> a -> Push m a 
 replicate n a = Push (\k -> forM_ [0..n-1] $ \i -> k i a) n 
+
 
 ---------------------------------------------------------------------------
 -- Monad

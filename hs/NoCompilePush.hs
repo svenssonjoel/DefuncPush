@@ -120,7 +120,7 @@ data PushT m b  where
   Generate :: Monad m =>  Length -> (Ix -> b) ->PushT m b
 --  GenerateM :: Monad m => Length -> (Ix -> m b) -> PushT m b
   
-  Use :: (PrimMonad m) => Length ->  V.Vector b -> PushT m b 
+  Use :: Monad m => Length ->  V.Vector b -> PushT m b 
 
   Force :: PrimMonad m => Length ->  PushT m b -> PushT m b 
 
@@ -217,7 +217,7 @@ apply (Rotate n p) =
 (<:) :: PushT m a -> (Ix -> a -> m ()) -> m () 
 p <: k = apply p (ApplyW k)
 
-use :: PrimMonad m => Length -> V.Vector a -> PushT m a
+use :: Monad m => Length -> V.Vector a -> PushT m a
 use mem l = Use mem l
 -- undefunctionalized
 -- use :: PrimMonad m => V.Vector a -> Length -> Push m a
