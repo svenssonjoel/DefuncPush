@@ -441,6 +441,9 @@ runPrg = toVector (prg :: PushT IO (Int,Int))
 --           => mem ix a -> PushT m ix a 
 -- 
 
+zipWith :: (a -> b -> c) -> PushT m a -> PushT m b -> PushT m c
+zipWith f a1 a2 = imap (\i a -> f a (index_ a2 i)) a1
+
 saxpy :: Float -> PushT m Float -> PushT m Float -> PushT m Float
 saxpy a x y = imap (\i xi -> (a * xi + index_ y i)) x 
 
