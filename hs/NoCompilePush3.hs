@@ -188,29 +188,29 @@ toVector = freeze
 -- Experiments Push a -> Pull a
 ---------------------------------------------------------------------------
 
-index_ :: PushT a -> Ix -> a
-index_ (Map f p) ix = f (index_ p ix)
-index_ (Use l v) ix = v V.! ix  
-index_ (Generate n ixf) ix = ixf ix
-index_ (IMap f p) ix = f ix (index_ p ix)
-index_ (Append l p1 p2) ix =
+index :: PushT a -> Ix -> a
+index (Map f p) ix = f (index p ix)
+index (Use l v) ix = v V.! ix  
+index (Generate n ixf) ix = ixf ix
+index (IMap f p) ix = f ix (index p ix)
+index (Append l p1 p2) ix =
   if (ix < l)
-  then index_ p1 ix
-  else index_ p2 (ix - l)
-index_ (Interleave p1 p2) ix =
+  then index p1 ix
+  else index p2 (ix - l)
+index (Interleave p1 p2) ix =
   if (ix `mod` 2 == 0)
-  then index_ p1 (ix `div` 2)
-  else index_ p2 (ix `div` 2)
+  then index p1 (ix `div` 2)
+  else index p2 (ix `div` 2)
 
-index_ (Reverse p) ix = index_ p (len p - 1 - ix)
-index_ (Rotate dist p) ix = index_ p ((ix - dist) `mod` (len p)) 
+index (Reverse p) ix = index p (len p - 1 - ix)
+index (Rotate dist p) ix = index p ((ix - dist) `mod` (len p)) 
 
 ---------------------------------------------------------------------------
 -- Push to Pull
 ---------------------------------------------------------------------------
 
 convert :: PushT a -> Pull a
-convert p = Pull (\ix -> index_ p ix) (len p) 
+convert p = Pull (\ix -> index p ix) (len p) 
 
 ---------------------------------------------------------------------------
 -- Functions from Pull array library
@@ -224,7 +224,7 @@ zipP p1 p2 = push $ zipPull (convert p1) (convert p2)
 -- But the convert function kind-of-cheats in the iterate case. 
 
 head :: PushT a -> a
-head p = index_ p 0 
+head p = index p 0 
 
 take :: Length -> PushT a -> PushT a
 take n p = push (takePull n (convert p))
@@ -258,8 +258,8 @@ prg = zipP (use 10 myVec) (use 10 myVec)
 
 runPrg :: IO (V.Vector (Int, Int))
 runPrg = toVector (prg :: PushT (Int,Int))
--- Running this requires a Use case in index_
--- which requires index_ to be monadic
+-- Running this requires a Use case in index
+-- which requires index to be monadic
 -- which requires there to be a function push :: Pull (m a) -> Push m a
 --   for the cheat version of zipP to work 
 
@@ -283,7 +283,7 @@ runPrg = toVector (prg :: PushT (Int,Int))
 -- 
 
 saxpy :: Float -> PushT Float -> PushT Float -> PushT Float
-saxpy a x y = imap (\i xi -> (a * xi + index_ y i)) x 
+saxpy a x y = imap (\i xi -> (a * xi + index y i)) x 
 
 
 runSaxpy :: IO (V.Vector Float)
