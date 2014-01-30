@@ -69,7 +69,7 @@ instance PullFrom Pull where
 -- Push Language
 ---------------------------------------------------------------------------
 data PushT b  where
-  Generate :: Length -> (Ix -> b) ->PushT b
+  Generate :: Length -> (Ix -> b) -> PushT b
   Use :: Length -> V.Vector b -> PushT b 
 
   Map :: (a -> b) -> PushT a -> PushT b
