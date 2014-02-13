@@ -153,51 +153,39 @@ len = pushLength
 -- Apply
 ---------------------------------------------------------------------------
   
-apply :: Expable b => PushT b -> ((Ix -> b -> CompileMonad ()) -> CompileMonad ())
-apply (Map f p) = \k -> apply p (\i a -> k i (f a)) 
-
+apply :: Expable b => PushT b -> ((Ix -> b -> CM ()) -> CM ())
 apply (Generate n ixf) =
-  \k -> do -- l <- n
-           par_ n $ \i ->
+  \k -> do for_ n $ \i ->
              k i (ixf i)
 
 apply (Use n mem) =
-  \k -> do 
-           par_ n $ \i ->
+  \k -> do for_ n $ \i ->
              do a <- read mem i
                 k i a 
 
+apply (Map f p) =
+  \k -> apply p (\i a -> k i (f a)) 
 
-apply (IMap f p) = \k -> apply p (\i a -> k i (f i a))
+apply (IMap f p) =
+  \k -> apply p (\i a -> k i (f i a))
 
---apply (IxMap p f) = \k -> apply p (IxMapW k f) 
 
 apply (Append n p1 p2) =
-  \k -> do -- l <- n
-           apply p1 k 
-           apply p2 (\i a -> k (n + i) a) 
+  \k -> apply p1 k >> 
+        apply p2 (\i a -> k (n + i) a) 
            
 apply (Interleave p1 p2) =
   \k -> apply p1 (\i a -> k (2*i) a) >> 
         apply p2 (\i a -> k (2*i+1) a)  
-  
---apply (Select b p1 p2) = \k ->
---  do
---    (_,p1') <- localCode $ apply p1 k
---    (_,p2') <- localCode $ apply p2 k
---    -- b' <- b
---    tell $ Cond (unE b) p1' p2' 
 
--- apply (Iterate n f a) = \k -> 
---   do
---     -- l <- n
---     sum <- newRef_ a 
+apply (Reverse p) =
+  \k -> apply p (\i a -> k ((len p) - 1 - i) a) 
+apply (Rotate n p) =
+  \k -> apply p (\i a -> k ((i+n) `mod_` (len p)) a) 
 
---     for_ n $ \i ->
---       do
---         val <- readRef_ sum
---         applyW k i val 
---         writeRef_ sum (f val) 
+
+
+
 
 
 apply (Force n p) =
@@ -208,10 +196,8 @@ apply (Force n p) =
              do a <- read arr ix
                 k ix a 
 
-apply (Reverse p) =
-  \k -> apply p (\i a -> k ((len p) - 1 - i) a) -- ReverseW (len p) k)
-apply (Rotate n p) =
-  \k -> apply p (\i a -> k ((i+n) `mod_` (len p)) a) -- RotateW (len p) n k) 
+
+
 ---------------------------------------------------------------------------
 -- Basic functions on push arrays
 ---------------------------------------------------------------------------
@@ -436,7 +422,12 @@ instance Monoid Code where
 
 data Value = IntVal Int
            | FloatVal Float
-             deriving Show
+           | BoolVal  Bool
+
+instance Show Value where
+  show (IntVal i) = show i
+  show (FloatVal f) = show f
+  show (BoolVal b) = show b 
 
 data Exp = Var Id
          | Literal Value
@@ -450,12 +441,33 @@ data Exp = Var Id
          | Gt  Exp Exp
          | LEq Exp Exp 
          | Min Exp Exp
-         | IfThenElse Exp Exp Exp 
-         deriving Show
+         | IfThenElse Exp Exp Exp
+           
+instance Show Exp where
+  show (Var id) = id
+  show (Literal v) = show v
+  show (Index str e) = str P.++ "[" P.++ show e P.++ "]" 
+  show (a :+: b) = parens $ show a P.++ " + " P.++ show b
+  show (a :-: b) = parens $ show a P.++ " - " P.++ show b
+  show (a :*: b) = parens $ show a P.++ " * " P.++ show b
+  show (Mod a b) = parens $ show a P.++ " % " P.++ show b
+  show (Div a b) = parens $ show a P.++ " / " P.++ show b
+  show (Eq a b) = parens $ show a P.++ " == " P.++ show b
+  show (Gt a b) = parens $ show a P.++ " > " P.++ show b
+  show (LEq a b) = parens $ show a P.++ " <= " P.++ show b
+  show (Min a b) = parens $ "min" P.++ show a P.++ show b
+  show (IfThenElse b e1 e2) = parens $ show b P.++ " ? " P.++ show e1 P.++ " : " P.++ show e2
+  
+  
+
+parens str = "(" P.++ str P.++ ")" 
+
 
 -- Phantomtypes. 
 data Expr a = E {unE :: Exp}
-  deriving Show
+instance Show (Expr a) where
+  show = show . unE 
+
 
 ifThenElse :: Expr Bool -> Expr a -> Expr a -> Expr a
 ifThenElse b e1 e2 = E $ IfThenElse (unE b) (unE e1) (unE e2) 
@@ -619,13 +631,17 @@ compileSimple1 = runCM 0 $ toVector ( simple1 input1 :: PushT (Expr Int))
 
 
 -- Example without pull arrays entirely
-myVec = CMMem "inputArray"  10 
+myVec = CMMem "input"  10 
 
 usePrg :: (Expable b,  Num b) => PushT b
 usePrg = rotate 3 $ reverse $ map (+1) (use 10 myVec )
 
 compileUse = runCM 0 $ toVector (usePrg :: PushT (Expr Int))
 
+ex1 :: (Expable b,  Num b) => PushT b
+ex1 = rotate 3 $ reverse $ map (+1) (use 10 myVec )
+ 
+compileEx1 = runCM 0 $ toVector (ex1 :: PushT (Expr Int))
 --runUse :: IO (V.Vector Int)
 --runUse = toVector (usePrg :: PushT IO Int) 
 
@@ -641,4 +657,12 @@ compileUse = runCM 0 $ toVector (usePrg :: PushT (Expr Int))
 
 
 
-
+---------------------------------------------------------------------------
+{-
+Allocate "v0" (E {unE = Literal (IntVal 10)}) :>>:
+For "v1" (Literal (IntVal 10))
+  (Read "inputArray" (Var "v1") "v2" :>>:
+   Write "v0" (Mod (((Literal (IntVal 10) :-:
+                      Literal (IntVal 1)) :-: Var "v1") :+:
+Literal (IntVal 3)) (Literal (IntVal 10))) (Var "v2" :+: Literal (IntVal 1)))
+-} 
