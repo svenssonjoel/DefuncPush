@@ -672,3 +672,43 @@ For "v1" (Literal (IntVal 10))
                       Literal (IntVal 1)) :-: Var "v1") :+:
 Literal (IntVal 3)) (Literal (IntVal 10))) (Var "v2" :+: Literal (IntVal 1)))
 -} 
+
+
+-- zipP requires pairs in Exp
+--zipP :: Monad m => PushT a -> PushT b -> PushT (a,b)
+--zipP = undefined -- (and tricky)
+-- Cheat sol.
+--zipP p1 p2 = push $ zipPull (convert p1) (convert p2)
+
+
+zipWithP :: (Expable a, Expable b, Expable c) => (a -> b -> c) -> PushT a -> PushT b -> PushT c
+zipWithP f as bs = imap (\i a -> f a (index bs i)) as  
+
+
+--saxpy :: Float -> PushT m Float -> PushT m Float -> PushT m Float
+--saxpy a x y = imap (\i xi -> (a * xi + index y i)) x 
+
+saxpy :: Expr Float -> PushT (Expr Float) -> PushT (Expr Float) -> PushT (Expr Float)
+saxpy a xs ys = zipWithP f xs ys -- imap (\i xi -> (a * xi + index y i)) x 
+  where
+    f x y = a * x + y
+
+
+
+i1 = CMMem "input1"  10
+i2 = CMMem "input2"  10
+
+compileSaxpy = runCM 0 $
+               toVector (let as = use i1
+                             bs = use i2
+                         in saxpy 1 as bs)
+
+
+{-
+Allocate "v0" 10 :>>:
+For "v1" 10 (
+  Read "input1" v1 "v2" :>>:
+  Write "v0" v1 ((1.0 * v2) + input2[v1])
+  )
+
+-}≠
