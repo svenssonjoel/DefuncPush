@@ -390,6 +390,12 @@ index (Rotate dist p) ix = index p ((ix - dist) `mod_` (len p))
 --          (takeSome' p1 m)
 --          (Append l (takeSome' p1 m) (takeSome' p2 (m-l)))
 
+---------------------------------------------------------------------------
+-- Push to Pull
+---------------------------------------------------------------------------
+
+convert :: Expable a => PushT a -> Pull a
+convert p = Pull (\ix -> index p ix) (len p) 
 
 
   
@@ -407,8 +413,8 @@ data Type = Int
 data Code = Skip
           | Code :>>: Code
           | For Id Exp Code
-          | Par Id Exp Code -- parallel for loop
-          | Allocate Id Length --  Type -- Typecheck instead. 
+          | Par Id Exp Code 
+          | Allocate Id Length 
           | Write Id Exp Exp
           | Read Id Exp Id
           | Cond Exp Code Code 

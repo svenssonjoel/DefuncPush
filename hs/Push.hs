@@ -83,11 +83,22 @@ imap f (Push p l) = Push (\k -> p (\i a -> k i (f a i))) l
 ixmap :: (Index -> Index) -> Push m a -> Push m a
 ixmap f (Push p l) = Push (\k -> p (\i a -> k (f i) a)) l 
 
+-- (++) :: Monad m =>  Push m a -> Push m a  -> Push m a
+-- p1 ++ p2 = 
+--   Push (\k -> p1 <: k >>
+--               p2 <: (\i a -> k (len p1 + i) a)
+--        ) (len p1 + len p2) 
+
+-- (++) :: Monad m =>  Push m a -> Push m a  -> Push m a
+-- (Push p1 l1) ++ (Push p2 l2) = 
+--   Push (\k -> p1 k >>
+--               p2 (\i a -> k (l1 + i) a)
+--        ) (l1 + l2) 
 (++) :: Monad m =>  Push m a -> Push m a  -> Push m a
-p1 ++ p2 = 
-  Push (\k -> p1 <: k >>
-              p2 <: (\i a -> k (len p1 + i) a)
-       ) (len p1 + len p2) 
+(Push p1 l1) ++ (Push p2 l2) = Push r (l1 + l2)
+  where r k = do p1 k
+                 p2 (\i a -> k (l1 + i) a)
+
 
 reverse :: Push m a -> Push m a
 reverse p = ixmap (\i -> (len p - 1) - i) p
@@ -374,9 +385,24 @@ foldPushP f a (Push p m) =
 -- Conversion Pull Push
 ---------------------------------------------------------------------------
 
+generate :: Monad m => Length -> (Index -> a) -> Push m a
+generate n ixf = 
+  Push (\k -> forM_ [0..(n-1)] $ \i ->
+         k i (ixf i)) n 
+
+push :: Monad m => Pull a -> Push m a 
 push (Pull ixf n) =
   Push (\k -> forM_ [0..(n-1)] $ \i ->
          k i (ixf i)) n 
+
+pull :: PrimMonad m => Push m a -> m (Pull a)
+pull (Push p n) =
+  do arr <- M.new n
+     p (\i a -> M.write arr i a)
+     imm <- V.freeze arr
+     return $ Pull (\i -> imm V.! i ) (V.length imm)
+     
+
 
 class ToPush m arr where
   toPush ::  arr a -> Push m a
