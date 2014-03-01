@@ -111,7 +111,7 @@ data PushT b where
 
   -- array creation 
   Generate ::  Expable b => Length -> (Ix -> b) -> PushT b
-  Use :: Expable b => Length -> CMMem b -> PushT b 
+  Use :: Expable b => CMMem b -> PushT b 
 
   Force :: Expable b =>  Length -> PushT b -> PushT b 
 
@@ -135,7 +135,7 @@ data PushT b where
 -- now PushT can be used as the array type (without any Push Wrapper) 
 pushLength :: PushT b -> Length
 pushLength (Generate l _) = l
-pushLength (Use l _) = l
+pushLength (Use (CMMem _ l)) = l
 pushLength (Force l _) = l
 -- pushLength (Iterate l _ _ ) = l
 pushLength (Map _ p)  = pushLength p
@@ -158,7 +158,7 @@ apply (Generate n ixf) =
   \k -> do for_ n $ \i ->
              k i (ixf i)
 
-apply (Use n mem) =
+apply (Use mem@(CMMem _ n)) =
   \k -> do for_ n $ \i ->
              do a <- read mem i
                 k i a 
@@ -205,8 +205,8 @@ apply (Force n p) =
 --(<:) :: Expable a => PushT a -> (Ix -> a -> CompileMonad ()) -> CompileMonad () 
 --p <: k = apply p (ApplyW k)
 
-use :: Expable a => Length -> CMMem a -> PushT a
-use l mem = Use l mem
+use :: Expable a => CMMem a -> PushT a
+use mem = Use mem
 -- undefunctionalised 
 --  where
 --    p k =
@@ -350,7 +350,7 @@ index :: Expable a => PushT a -> Ix -> a
 index (Map f p) ix        = f (index p ix)
 index (Generate n ixf) ix = ixf ix
 
-index (Use l mem) ix      = cmIndex mem ix -- read mem ix
+index (Use mem) ix        = cmIndex mem ix -- read mem ix
 
 index (IMap f p)  ix      = f ix (index p ix)
 
@@ -640,12 +640,12 @@ compileSimple1 = runCM 0 $ toVector ( simple1 input1 :: PushT (Expr Int))
 myVec = CMMem "input"  10 
 
 usePrg :: (Expable b,  Num b) => PushT b
-usePrg = rotate 3 $ reverse $ map (+1) (use 10 myVec )
+usePrg = rotate 3 $ reverse $ map (+1) (use myVec )
 
 compileUse = runCM 0 $ toVector (usePrg :: PushT (Expr Int))
 
 ex1 :: (Expable b,  Num b) => PushT b
-ex1 = rotate 3 $ reverse $ map (+1) (use 10 myVec )
+ex1 = rotate 3 $ reverse $ map (+1) (use myVec )
  
 compileEx1 = runCM 0 $ toVector (ex1 :: PushT (Expr Int))
 --runUse :: IO (V.Vector Int)
