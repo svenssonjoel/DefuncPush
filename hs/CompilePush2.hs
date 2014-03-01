@@ -390,6 +390,10 @@ index (Rotate dist p) ix = index p ((ix - dist) `mod_` (len p))
 --          (takeSome' p1 m)
 --          (Append l (takeSome' p1 m) (takeSome' p2 (m-l)))
 
+takeP n vec = push $ takePull n (convert vec)
+
+dropP n vec = push $ dropPull n (convert vec)
+
 ---------------------------------------------------------------------------
 -- Push to Pull
 ---------------------------------------------------------------------------
@@ -711,4 +715,16 @@ For "v1" 10 (
   Write "v0" v1 ((1.0 * v2) + input2[v1])
   )
 
--}≠
+-}
+
+avg a b = (a + b) `div_` 2
+
+stencil vec = Generate 1 (\_ -> index vec 0 `div_` 2) ++
+               zipWithP avg c1 c2 ++
+               Generate 1 (\_ -> index vec (l - 1) `div_` 2)
+  where c1 = dropP 1 vec
+        c2 = takeP (l - 1) vec
+        l  = len vec
+
+compileStencil = runCM 0 $
+                 toVector (stencil (stencil (use i1)))
