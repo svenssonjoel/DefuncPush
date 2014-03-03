@@ -25,7 +25,7 @@ import Data.Array.MArray hiding (freeze,Ix,index)
 import Data.Array.IO hiding (freeze,Ix,index)
 import qualified Data.Array.IO as A 
 
-import Prelude hiding (reverse,scanl,map,read,(++))
+import Prelude hiding (reverse,scanl,map,read,(++),zipWith)
 import qualified Prelude as P 
 
 import GHC.Prim (Constraint) 
@@ -107,7 +107,7 @@ instance PullFrom Pull where
 -- Push Language
 ---------------------------------------------------------------------------
 data PushT b where
-  Map  :: (Expable a) => (a -> b) -> PushT a -> PushT b
+  Map  :: Expable a => (a -> b) -> PushT a -> PushT b
 
   -- array creation 
   Generate ::  Expable b => Length -> (Ix -> b) -> PushT b
@@ -160,8 +160,8 @@ apply (Generate n ixf) =
 
 apply (Use n mem) =
   \k -> do for_ n $ \i ->
-             do a <- read mem i
-                k i a 
+             --do a <- read mem i
+                k i (cmIndex mem i) -- a 
 
 apply (Map f p) =
   \k -> apply p (\i a -> k i (f a)) 
@@ -193,8 +193,8 @@ apply (Force n p) =
            arr <- allocate n
            apply p (\i a -> write arr i a) -- VectorW arr)
            par_ n $ \ix ->
-             do a <- read arr ix
-                k ix a 
+             --do a <- read arr ix
+                k ix (cmIndex arr ix) -- a 
 
 
 
@@ -205,8 +205,8 @@ apply (Force n p) =
 --(<:) :: Expable a => PushT a -> (Ix -> a -> CompileMonad ()) -> CompileMonad () 
 --p <: k = apply p (ApplyW k)
 
-use :: Expable a => Length -> CMMem a -> PushT a
-use l mem = Use l mem
+use :: Expable a => CMMem a -> PushT a
+use mem@(CMMem _ l) = Use l mem
 -- undefunctionalised 
 --  where
 --    p k =
@@ -416,7 +416,7 @@ data Code = Skip
           | Par Id Exp Code 
           | Allocate Id Length 
           | Write Id Exp Exp
-          | Read Id Exp Id
+       --   | Read Id Exp Id
           | Cond Exp Code Code 
             deriving Show
 
@@ -560,11 +560,14 @@ allocate n = do
     i <- newId
     tell $ Allocate i n -- (typeOf (undefined :: a ))
     return $ CMMem i n
-    
-write (CMMem id n) i a = tell $ Write id (toExp i) (toExp a)  
-read (CMMem id n) i = do v <- newId
-                         tell $ Read id (toExp i) v
-                         return $ fromExp (Var v)
+
+write :: Expable a => CMMem a -> Expr Int -> a -> CM ()
+write (CMMem id n) i a = tell $ Write id (toExp i) (toExp a)
+
+--read :: Expable a => CMMem a -> Expr Int -> CM a
+--read (CMMem id n) i = do v <- newId
+--                         tell $ Read id (toExp i) v
+--                         return $ fromExp (Var v)
 
 newRef_ a = do i <- newId
                tell $ Allocate i 1 -- (typeOf a)
@@ -574,12 +577,12 @@ mkRef_ = do i <- newId
             tell $ Allocate i 1 -- (typeOf (undefined :: a))
             return $ CMRef i
              
-readRef_ (CMRef i) = do v <- newId 
-                        tell $ Read i (unE (1 :: Expr Int)) v
-                        return $ fromExp (Var v)
-writeRef_ (CMRef i) e = tell $ Write i (unE (1 :: Expr Int)) (toExp e)
+-- readRef_ (CMRef i) = do v <- newId 
+--                         tell $ Read i (unE (1 :: Expr Int)) v
+--                         return $ fromExp (Var v)
+-- writeRef_ (CMRef i) e = tell $ Write i (unE (1 :: Expr Int)) (toExp e)
 
-for_ :: Expable a1 => Expr Int -> (a1 -> CompileMonad ()) -> CompileMonad ()
+for_ :: Expable a => Expr Int -> (a -> CM ()) -> CM ()
 for_ n f = do i <- newId
               (_,body) <- localCode (f (fromExp (Var i)))
               tell $ For i (unE n) body
@@ -587,7 +590,7 @@ par_ n f = do i <- newId
               (_,body) <- localCode (f (fromExp (Var i)))
               tell $ Par i (unE n) body
 
-
+cond :: Expr Bool -> CM () -> CM () -> CM ()
 cond (E b) p1 p2 = do
     (_,b1) <- localCode p1
     (_,b2) <- localCode p2
@@ -627,12 +630,12 @@ instance Expable (Expr Float) where
 -- Simple programs
 ---------------------------------------------------------------------------
 
-input1 = Pull id 16
+input = Pull id 16
 
 simple1 :: (Expable a, Num a) => Pull a -> PushT a
 simple1 = map (+1) . force . push 
 
-compileSimple1 = runCM 0 $ toVector ( simple1 input1 :: PushT (Expr Int))
+compileSimple1 = runCM 0 $ toVector ( simple1 input :: PushT (Expr Int))
 
 
 
@@ -640,35 +643,39 @@ compileSimple1 = runCM 0 $ toVector ( simple1 input1 :: PushT (Expr Int))
 myVec = CMMem "input"  10 
 
 usePrg :: (Expable b,  Num b) => PushT b
-usePrg = rotate 3 $ reverse $ map (+1) (use 10 myVec )
+usePrg = rotate 3 $ reverse $ map (+1) (use myVec)
 
 compileUse = runCM 0 $ toVector (usePrg :: PushT (Expr Int))
 
-ex1 :: (Expable b,  Num b) => PushT b
-ex1 = rotate 3 $ reverse $ map (+1) (use 10 myVec )
- 
-compileEx1 = runCM 0 $ toVector (ex1 :: PushT (Expr Int))
---runUse :: IO (V.Vector Int)
---runUse = toVector (usePrg :: PushT IO Int) 
+ex1 :: (Expable b,  Num b) => PushT b -> PushT b
+ex1 = rotate 3 . reverse . map (+1) 
+
+      
+compileEx1 = runCM 0 $ toVector ((ex1 arr) :: PushT (Expr Int))
+  where arr = use myVec
+
+saxpy :: Expr Float
+       -> PushT (Expr Float)
+       -> PushT (Expr Float)
+       -> PushT (Expr Float)
+saxpy a xs ys = zipWith f xs ys
+  where
+    f x y = a * x + y
 
 
--- -- zipP test
--- prg :: (Enum a, Enum b, Num a, Num b, PrimMonad m) => PushT m (a, b)
--- prg = zipP (use 10 myVec) (use 10 myVec)
+i1, i2 :: CMMem (Expr Float)
+i1 = CMMem "input1" 10 
+i2 = CMMem "input2" 10
 
--- runPrg :: IO (V.Vector (Int, Int))
--- runPrg = toVector (prg :: PushT IO (Int,Int))
+compileSaxpy = runCM 0 $
+               toVector (let as = use i1
+                             bs = ex1 $ use i2 
+                         in saxpy 2 as bs)
+  
 
-
-
-
-
----------------------------------------------------------------------------
-{-
-Allocate "v0" (E {unE = Literal (IntVal 10)}) :>>:
-For "v1" (Literal (IntVal 10))
-  (Read "inputArray" (Var "v1") "v2" :>>:
-   Write "v0" (Mod (((Literal (IntVal 10) :-:
-                      Literal (IntVal 1)) :-: Var "v1") :+:
-Literal (IntVal 3)) (Literal (IntVal 10))) (Var "v2" :+: Literal (IntVal 1)))
--} 
+zipWith :: (Expable a, Expable b) => (a -> b -> c)
+         -> PushT a
+         -> PushT b
+         -> PushT c
+zipWith f a1 a2 =
+  imap (\i a -> f a (index a2 i)) a1
