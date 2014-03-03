@@ -111,7 +111,7 @@ data PushT b where
 
   -- array creation 
   Generate ::  Expable b => Length -> (Ix -> b) -> PushT b
-  Use :: Expable b => Length -> CMMem b -> PushT b 
+  Use :: Expable b => CMMem b -> PushT b 
 
   Force :: Expable b =>  Length -> PushT b -> PushT b 
 
@@ -135,7 +135,7 @@ data PushT b where
 -- now PushT can be used as the array type (without any Push Wrapper) 
 pushLength :: PushT b -> Length
 pushLength (Generate l _) = l
-pushLength (Use l _) = l
+pushLength (Use (CMMem _ l)) = l
 pushLength (Force l _) = l
 -- pushLength (Iterate l _ _ ) = l
 pushLength (Map _ p)  = pushLength p
@@ -158,7 +158,7 @@ apply (Generate n ixf) =
   \k -> do for_ n $ \i ->
              k i (ixf i)
 
-apply (Use n mem) =
+apply (Use mem@(CMMem _ n)) =
   \k -> do for_ n $ \i ->
              --do a <- read mem i
                 k i (cmIndex mem i) -- a 
@@ -206,7 +206,8 @@ apply (Force n p) =
 --p <: k = apply p (ApplyW k)
 
 use :: Expable a => CMMem a -> PushT a
-use mem@(CMMem _ l) = Use l mem
+use mem = Use mem
+
 -- undefunctionalised 
 --  where
 --    p k =
@@ -350,7 +351,7 @@ index :: Expable a => PushT a -> Ix -> a
 index (Map f p) ix        = f (index p ix)
 index (Generate n ixf) ix = ixf ix
 
-index (Use l mem) ix      = cmIndex mem ix -- read mem ix
+index (Use mem) ix        = cmIndex mem ix -- read mem ix
 
 index (IMap f p)  ix      = f ix (index p ix)
 
@@ -389,6 +390,10 @@ index (Rotate dist p) ix = index p ((ix - dist) `mod_` (len p))
 --   Select (m <=* l)
 --          (takeSome' p1 m)
 --          (Append l (takeSome' p1 m) (takeSome' p2 (m-l)))
+
+takeP n vec = push $ takePull n (convert vec)
+
+dropP n vec = push $ dropPull n (convert vec)
 
 ---------------------------------------------------------------------------
 -- Push to Pull
@@ -649,7 +654,6 @@ compileUse = runCM 0 $ toVector (usePrg :: PushT (Expr Int))
 
 ex1 :: (Expable b,  Num b) => PushT b -> PushT b
 ex1 = rotate 3 . reverse . map (+1) 
-
       
 compileEx1 = runCM 0 $ toVector ((ex1 arr) :: PushT (Expr Int))
   where arr = use myVec
@@ -672,6 +676,12 @@ compileSaxpy = runCM 0 $
                              bs = ex1 $ use i2 
                          in saxpy 2 as bs)
   
+compileSaxpy' = runCM 0 $
+                toVector (let as = use i1
+                              bs = use i2
+                          in saxpy 1 as bs)
+
+
 
 zipWith :: (Expable a, Expable b) => (a -> b -> c)
          -> PushT a
@@ -679,3 +689,28 @@ zipWith :: (Expable a, Expable b) => (a -> b -> c)
          -> PushT c
 zipWith f a1 a2 =
   imap (\i a -> f a (index a2 i)) a1
+
+
+
+
+{-
+Allocate "v0" 10 :>>:
+For "v1" 10 (
+  Read "input1" v1 "v2" :>>:
+  Write "v0" v1 ((1.0 * v2) + input2[v1])
+  )
+
+-}
+
+avg a b = (a + b) `div_` 2
+
+stencil vec = Generate 1 (\_ -> index vec 0 `div_` 2) ++
+               zipWith avg c1 c2 ++
+               Generate 1 (\_ -> index vec (l - 1) `div_` 2)
+  where c1 = dropP 1 vec
+        c2 = takeP (l - 1) vec
+        l  = len vec
+
+compileStencil = runCM 0 $
+                 toVector (stencil (stencil (use i1)))
+  where i1 = CMMem "input1" 10 
