@@ -11,7 +11,7 @@
 
 
 -- This is the approach described in the paper "Defunctionalizing Push Arrays" 
-module CompilePush where
+module CompileNonDefunPush where
 
 
 import Control.Monad
@@ -64,195 +64,81 @@ instance PullFrom Pull where
   pullFrom = id
   
 ---------------------------------------------------------------------------
--- Push Language
+-- Push Array
 ---------------------------------------------------------------------------
-data PushT b where
-  Map  :: Expable a => (a -> b) -> PushT a -> PushT b
+data Push b = Push ((Ix -> b -> CM ()) -> CM ()) Length
 
-  -- array creation 
-  Generate :: Length -> (Ix -> b) -> PushT b
-  Use :: Expable b => CMMem b -> PushT b 
+len (Push p l) = l 
 
-  Force :: Length -> PushT b -> PushT b 
+generate :: Length -> (Ix -> a) -> Push a
+generate n ixf = Push p n
+   where p k = do for_ n $ \i ->
+                    k i (ixf i)
 
-  IMap :: Expable a => (Ix -> a -> b) -> PushT a -> PushT b
+use :: Expable a => CMMem a -> Push a
+use mem@(CMMem _ n) = Push p n
+  where p k = do for_ n $ \i ->
+                   k i (cmIndex mem i) -- a 
 
-  Append :: Length -> PushT b -> PushT b -> PushT b
+map :: Expable a => (a -> b) -> Push a -> Push b
+map f (Push p n) = Push p' n
+  where p' k = p (\i a -> k i (f a)) 
 
-  Interleave :: PushT b -> PushT b -> PushT b  
+imap :: Expable a => (Ix -> a -> b) -> Push a -> Push b
+imap f (Push p n) = Push p' n
+  where p' k = p (\i a -> k i (f i a))
 
-  -- Permutations
-  Reverse :: PushT b -> PushT b
-  Rotate  :: Length -> PushT b -> PushT b 
+(++) :: Push a -> Push a -> Push a
+(++) (Push p1 n1) (Push p2 n2) = Push p n
+  where p k = p1 k >> 
+              p2 (\i a -> k (n + i) a) 
+        n = n1 + n2    
 
+interleave :: Push a -> Push a -> Push a
+interleave (Push p1 n1) (Push p2 n2) = Push p n
+  where p k = p1 (\i a -> k (2*i) a) >> 
+              p2 (\i a -> k (2*i+1) a)
+        n = 2 * min_ n1 n2
 
--- now PushT can be used as the array type (without any Push Wrapper) 
-pushLength :: PushT b -> Length
-pushLength (Generate l _) = l
-pushLength (Use (CMMem _ l)) = l
-pushLength (Force l _) = l
-pushLength (Map _ p)  = pushLength p
-pushLength (IMap _ p)  = pushLength p
-pushLength (Append _ p1 p2) = pushLength p1 + pushLength p2
-pushLength (Interleave p1 p2) = 2 * (min_ (pushLength p1) (pushLength p2))
-pushLength (Reverse p) = pushLength p
-pushLength (Rotate _ p) = pushLength p
+reverse :: Push a -> Push a
+reverse (Push p n) = Push p' n
+  where p' k  = p (\i a -> k (n - 1 - i) a)  
 
-len = pushLength 
----------------------------------------------------------------------------
--- Apply
----------------------------------------------------------------------------
-  
-apply :: Expable b => PushT b -> ((Ix -> b -> CM ()) -> CM ())
-apply (Generate n ixf) =
-  \k -> do for_ n $ \i ->
-             k i (ixf i)
-
-apply (Use mem@(CMMem _ n)) =
-  \k -> do for_ n $ \i ->
-                k i (cmIndex mem i) -- a 
-
-apply (Map f p) =
-  \k -> apply p (\i a -> k i (f a)) 
-
-apply (IMap f p) =
-  \k -> apply p (\i a -> k i (f i a))
+rotate :: Length -> Push a -> Push a
+rotate l (Push p n) = Push p' n
+  where p' k = p (\i a -> k ((i+n) `mod_` n) a)  
 
 
-apply (Append n p1 p2) =
-  \k -> apply p1 k >> 
-        apply p2 (\i a -> k (n + i) a) 
-           
-apply (Interleave p1 p2) =
-  \k -> apply p1 (\i a -> k (2*i) a) >> 
-        apply p2 (\i a -> k (2*i+1) a)  
-
-apply (Reverse p) =
-  \k -> apply p (\i a -> k ((len p) - 1 - i) a) 
-apply (Rotate n p) =
-  \k -> apply p (\i a -> k ((i+n) `mod_` (len p)) a) 
-
-
-
-
-
-
-apply (Force n p) =
-  \k -> do -- l <- n
-           arr <- allocate n
-           apply p (\i a -> write arr i a) -- VectorW arr)
-           par_ n $ \ix ->
+force :: Expable a => Push a -> Push a
+force (Push p n) = Push p' n
+  where p' k = do 
+          arr <- allocate n
+          p (\i a -> write arr i a) -- VectorW arr)
+          for_ n $ \ix ->
              --do a <- read arr ix
                 k ix (cmIndex arr ix) -- a 
-
-
-
----------------------------------------------------------------------------
--- Basic functions on push arrays
----------------------------------------------------------------------------
-
-generate :: Length -> (Ix -> a) -> PushT a
-generate = Generate 
-
-use :: Expable a => CMMem a -> PushT a
-use mem = Use mem
-
--- undefunctionalised 
---  where
---    p k =
---      for_ (fromIntegral l) $ \ix ->
---      do
---        a <- read mem ix
---        k ix a 
-
-map :: Expable a => (a -> b) -> PushT a -> PushT b
-map f p = Map f p
-
-imap :: Expable a => (Ix -> a -> b) -> PushT a -> PushT b
-imap f p  = IMap f p 
-
-
-(++) :: PushT a -> PushT a -> PushT a
-p1 ++ p2 = Append l1 p1 p2
-  where
-    l1 = len p1
-
-interleave :: PushT a -> PushT a -> PushT a
-interleave p1 p2 = Interleave p1 p2 
-
-reverse :: PushT a -> PushT a
-reverse p = Reverse p 
-
-rotate :: Length -> PushT a -> PushT a
-rotate n p = Rotate n p 
+ 
 ---------------------------------------------------------------------------
 -- Conversion Pull Push (Clean this mess up)
 ---------------------------------------------------------------------------
 
 push (Pull ixf n) =
-  Generate n ixf
+  generate n ixf
 
 ---------------------------------------------------------------------------
 -- write to vector
 --------------------------------------------------------------------------- 
 
-freeze :: Expable a =>  PushT a -> CompileMonad (CMMem a)
-freeze p  =
+freeze :: Expable a => Push a -> CompileMonad (CMMem a)
+freeze (Push p n)  =
   do
-     arr <- allocate (len p)
-     apply p (\i a -> write arr i a)  
+     arr <- allocate n 
+     p (\i a -> write arr i a)  
      return arr
 
-toVector :: Expable a => PushT a -> CompileMonad (CMMem a)
+toVector :: Expable a => Push a -> CompileMonad (CMMem a)
 toVector = freeze 
 
----------------------------------------------------------------------------
--- A defunctionalisable "freeze", called force. 
----------------------------------------------------------------------------
-     
-force :: PushT a -> PushT a
-force p = Force (len p) p 
-  
----------------------------------------------------------------------------
--- Things that are hard to do with Push or Pull Arrays, but now "simple"
----------------------------------------------------------------------------
-
-index :: Expable a => PushT a -> Ix -> a
-index (Map f p) ix        = f (index p ix)
-index (Generate n ixf) ix = ixf ix
-
-index (Use mem) ix        = cmIndex mem ix -- read mem ix
-
-index (IMap f p)  ix      = f ix (index p ix)
-
-index (Force l p) ix      = index p ix
-
-index (Append l p1 p2) ix =
-  ifThenElse1 (ix >* l)  
-    (index p2 (ix - l))
-    (index p1 ix)
-
-index (Interleave p1 p2) ix =
-  ifThenElse1 (ix `mod_` 2 ==* 0) 
-    (index p1 (ix `div_` 2))
-    (index p2 (ix `div_` 2))
-
-index (Reverse p) ix = index p (len p - 1 - ix)
-index (Rotate dist p) ix = index p ((ix - dist) `mod_` (len p)) 
-
-takeP n vec = push $ takePull n (convert vec)
-
-dropP n vec = push $ dropPull n (convert vec)
-
----------------------------------------------------------------------------
--- Push to Pull
----------------------------------------------------------------------------
-
-convert :: Expable a => PushT a -> Pull a
-convert p = Pull (\ix -> index p ix) (len p) 
-
-
-  
 ---------------------------------------------------------------------------
 -- Compile 
 ---------------------------------------------------------------------------
@@ -466,86 +352,30 @@ instance Expable (Expr Float) where
 
 input = Pull id 16
 
-simple1 :: (Expable a, Num a) => Pull a -> PushT a
+simple1 :: (Expable a, Num a) => Pull a -> Push a
 simple1 = map (+1) . force . push 
 
-compileSimple1 = runCM 0 $ toVector ( simple1 input :: PushT (Expr Int))
+compileSimple1 = runCM 0 $ toVector ( simple1 input :: Push (Expr Int))
 
 
 
 -- Example without pull arrays entirely
 myVec = CMMem "input"  10 
 
-usePrg :: (Expable b,  Num b) => PushT b
+usePrg :: (Expable b,  Num b) => Push b
 usePrg = rotate 3 $ reverse $ map (+1) (use myVec)
 
-compileUse = runCM 0 $ toVector (usePrg :: PushT (Expr Int))
+compileUse = runCM 0 $ toVector (usePrg :: Push (Expr Int))
 
-ex1 :: (Expable b,  Num b) => PushT b -> PushT b
+ex1 :: (Expable b,  Num b) => Push b -> Push b
 ex1 = rotate 3 . reverse . map (+1) 
       
-compileEx1 = runCM 0 $ toVector ((ex1 arr) :: PushT (Expr Int))
+compileEx1 = runCM 0 $ toVector ((ex1 arr) :: Push (Expr Int))
   where arr = use myVec
 
-saxpy :: Expr Float
-       -> PushT (Expr Float)
-       -> PushT (Expr Float)
-       -> PushT (Expr Float)
-saxpy a xs ys = zipWith f xs ys
-  where
-    f x y = a * x + y
-
-
-i1, i2 :: CMMem (Expr Float)
-i1 = CMMem "input1" 10 
-i2 = CMMem "input2" 10
-
-compileSaxpy = runCM 0 $
-               toVector (let as = use i1
-                             bs = ex1 $ use i2 
-                         in saxpy 2 as bs)
-  
-compileSaxpy' = runCM 0 $
-                toVector (let as = use i1
-                              bs = use i2
-                          in saxpy 1 as bs)
-
-
-
-zipWith :: (Expable a, Expable b) => (a -> b -> c)
-         -> PushT a
-         -> PushT b
-         -> PushT c
-zipWith f a1 a2 =
-  imap (\i a -> f a (index a2 i)) a1
-
-
-
-
-{-
-Allocate "v0" 10 :>>:
-For "v1" 10 (
-  Read "input1" v1 "v2" :>>:
-  Write "v0" v1 ((1.0 * v2) + input2[v1])
-  )
-
--}
-
-avg a b = (a + b) `div_` 2
-
-stencil vec = Generate 1 (\_ -> index vec 0 `div_` 2) ++
-               zipWith avg c1 c2 ++
-               Generate 1 (\_ -> index vec (l - 1) `div_` 2)
-  where c1 = dropP 1 vec
-        c2 = takeP (l - 1) vec
-        l  = len vec
-
-compileStencil = runCM 0 $
-                 toVector (stencil (stencil (use i1)))
-  where i1 = CMMem "input1" 10 
 
 ---------------------------------------------------------------------------
--- Touch entire PushT data type
+-- Touch entire Push API
 
 compileP1 = runCM 0 $
             toVector (generate 10 id) 
