@@ -1,13 +1,6 @@
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-} 
-{-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE KindSignatures #-} 
-{-# LANGUAGE ScopedTypeVariables #-}
 
 
 -- This is the approach described in the paper "Defunctionalizing Push Arrays" 
@@ -133,7 +126,7 @@ freeze :: Expable a => Push a -> CompileMonad (CMMem a)
 freeze (Push p n)  =
   do
      arr <- allocate n 
-     p (\i a -> write arr i a)  
+     p $ write arr
      return arr
 
 toVector :: Expable a => Push a -> CompileMonad (CMMem a)
@@ -250,7 +243,7 @@ inj1 f e = inj $ f (unE e)
 inj2 :: (Exp -> Exp -> Exp) -> (Expr a -> Expr b -> Expr c)
 inj2 f e1 e2  = inj $ f (unE e1) (unE e2)
 
-instance Num a => Num (Expr Int)  where
+instance Num (Expr Int)  where
   (+) = inj2 (:+:)
   (-) = inj2 (:-:)
   (*) = inj2 (:*:)
@@ -258,7 +251,7 @@ instance Num a => Num (Expr Int)  where
   signum = error "Signum: Not implemented" 
   fromInteger = inj . Literal . IntVal . fromInteger
 
-instance Num a => Num (Expr Float)  where
+instance Num (Expr Float)  where
   (+) = inj2 (:+:)
   (-) = inj2 (:-:)
   (*) = inj2 (:*:)
