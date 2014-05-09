@@ -264,7 +264,7 @@ data Code = Skip
           | Par Id Exp Code 
           | Allocate Id Length 
           | Write Id Exp Exp
-          | Cond Exp Code Code 
+--           | Cond Exp Code Code 
             deriving Show
 
 instance Monoid Code where
@@ -418,11 +418,11 @@ par_ n f = do i <- newId
               (_,body) <- localCode (f (fromExp (Var i)))
               tell $ Par i (unE n) body
 
-cond :: Expr Bool -> CM () -> CM () -> CM ()
-cond (E b) p1 p2 = do
-    (_,b1) <- localCode p1
-    (_,b2) <- localCode p2
-    tell $ Cond b b1 b2
+-- cond :: Expr Bool -> CM () -> CM () -> CM ()
+-- cond (E b) p1 p2 = do
+--     (_,b1) <- localCode p1
+--     (_,b2) <- localCode p2
+--     tell $ Cond b b1 b2
 
 class Expable a where
   toExp :: a -> Exp
