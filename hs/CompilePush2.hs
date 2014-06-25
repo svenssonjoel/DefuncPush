@@ -13,14 +13,14 @@ import Control.Monad.ST
 
 import Control.Monad.Writer
 import Control.Monad.State 
-import Data.RefMonad
+-- import Data.RefMonad
 
 -- replaces the above
 import Data.Array.MArray hiding (freeze,Ix,index)
 import Data.Array.IO hiding (freeze,Ix,index)
 import qualified Data.Array.IO as A 
 
-import Prelude hiding (reverse,scanl,map,read,(++),zipWith)
+import Prelude hiding (reverse,scanl,map,read,(++),zipWith, length)
 import qualified Prelude as P 
 
 import GHC.Prim (Constraint) 
@@ -41,6 +41,18 @@ data Pull a = Pull (Ix -> a) Length
 
 zipPull :: Pull a -> Pull b -> Pull (a,b)
 zipPull (Pull p1 n1) (Pull p2 n2) = Pull (\i -> (p1 i, p2 i)) (min_ n1 n2)
+
+zipWithPull :: (a -> b -> c) -> Pull a -> Pull b -> Pull c
+zipWithPull f (Pull p1 n1) (Pull p2 n2) = Pull (\i -> f (p1 i) (p2 i)) (min_ n1 n2)
+
+reversePull :: Pull a -> Pull a
+reversePull (Pull ixf n) = Pull (\ix -> ixf (n - 1 - ix)) n 
+
+rotatePull :: Length -> Pull a -> Pull a
+rotatePull r (Pull ixf n) = Pull (\ix -> ixf ((ix+r) `mod_` n)) n  
+
+mapPull :: (a -> b) -> Pull a -> Pull b
+mapPull f (Pull ixf n) = Pull (f . ixf) n 
 
 takePull :: Length -> Pull a -> Pull a
 takePull n (Pull ixf l) = Pull ixf n
@@ -276,6 +288,7 @@ instance Monoid Code where
 data Value = IntVal Int
            | FloatVal Float
            | BoolVal  Bool
+             deriving (Eq, Ord )
 
 instance Show Value where
   show (IntVal i) = show i
@@ -308,7 +321,7 @@ instance Show Exp where
   show (Eq a b) = parens $ show a P.++ " == " P.++ show b
   show (Gt a b) = parens $ show a P.++ " > " P.++ show b
   show (LEq a b) = parens $ show a P.++ " <= " P.++ show b
-  show (Min a b) = parens $ "min" P.++ show a P.++ show b
+  show (Min a b) = parens $ "min " P.++ show a P.++ " " P.++ show b
   show (IfThenElse b e1 e2) = parens $ show b P.++ " ? " P.++ show e1 P.++ " : " P.++ show e2
   
   
@@ -346,8 +359,9 @@ div_ = inj2 Div
 (<=*) :: Expr a -> Expr a -> Expr Bool
 (<=*) = inj2 LEq
 
-min_ :: Expr a -> Expr a -> Expr a
-min_ = inj2 Min
+min_ :: Ord a => Expr a -> Expr a -> Expr a
+min_ (E (Literal a)) (E (Literal b)) = E (Literal (min a b))
+min_ e1 e2 = inj2 Min e1 e2
 
 inj  :: Exp -> Expr a
 inj e = E e
@@ -481,6 +495,9 @@ ex1 = rotate 3 . reverse . map (+1)
 compileEx1 = runCM 0 $ toVector ((ex1 arr) :: PushT (Expr Int))
   where arr = use myVec
 
+---------------------------------------------------------------------------
+-- SAXPY 
+
 saxpy :: Expr Float
        -> PushT (Expr Float)
        -> PushT (Expr Float)
@@ -488,6 +505,15 @@ saxpy :: Expr Float
 saxpy a xs ys = zipWith f xs ys
   where
     f x y = a * x + y
+
+saxpyPull :: Expr Float
+          -> Pull (Expr Float)
+          -> Pull (Expr Float)
+          -> Pull (Expr Float)
+saxpyPull a xs ys = zipWithPull f xs ys
+  where
+    f x y = a * x + y
+
 
 
 i1, i2 :: CMMem (Expr Float)
@@ -502,19 +528,59 @@ compileSaxpy = runCM 0 $
 compileSaxpy' = runCM 0 $
                 toVector (let as = use i1
                               bs = use i2
-                          in saxpy 1 as bs)
+                          in saxpy 2 as bs)
+
+
+ip1, ip2 :: Pull (Expr Float) 
+ip1 = Pull (\ix -> (E (Index "input1" (unE ix)))) 10 
+ip2 = Pull (\ix -> (E (Index "input2" (unE ix)))) 10 
+
+compileSaxpyPull = runCM 0 $
+                   freezePull $ saxpyPull 2 ip1 (ex1Pull ip2)
 
 
 
-zipWith :: (Expable a, Expable b) => (a -> b -> c)
-         -> PushT a
-         -> PushT b
-         -> PushT c
+--push (Pull ixf n) =
+--  Generate n ixf
+
+---------------------------------------------------------------------------
+-- write to vector
+--------------------------------------------------------------------------- 
+
+freezePull :: Expable a => Pull a -> CompileMonad (CMMem a)
+freezePull (Pull ixf n)  =
+  do arr <- allocate n
+     for_ n $ \i ->
+       write arr i (ixf i)
+     return arr
+
+
+
+
+
+ex1Pull :: Num b => Pull b -> Pull b
+ex1Pull = rotatePull 3 . reversePull . mapPull (+1) 
+
+
+---------------------------------------------------------------------------
+-- ZipWith on Push arrays 
+zipWith :: (Expable a, Expable b)
+           => (a -> b -> c)
+        -> PushT a -> PushT b -> PushT c
 zipWith f a1 a2 =
-  imap (\i a -> f a (index a2 i)) a1
+  generate (min_ (len a1) (len a2))
+    (\i -> f (index a1 i) (index a2 i))
 
 
 
+
+
+-- zipWith :: (Expable a, Expable b) => (a -> b -> c)
+--          -> PushT a
+--          -> PushT b
+--          -> PushT c
+-- zipWith f a1 a2 =
+--   imap (\i a -> f a (index a2 i)) a1
 
 {-
 Allocate "v0" 10 :>>:
@@ -524,6 +590,10 @@ For "v1" 10 (
   )
 
 -}
+
+---------------------------------------------------------------------------
+-- STENCIL
+
 
 avg a b = (a + b) `div_` 2
 
